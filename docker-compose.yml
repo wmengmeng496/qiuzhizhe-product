@@ -1,0 +1,12 @@
+services:
+  web:
+    build: .
+    ports:
+      - "8080:80"
+  api:
+    build:
+      context: ./server
+    ports:
+      - "8787:8787"
+    env_file:
+      - ./server/.env

@@ -1,0 +1,11 @@
+services:
+  web:
+    image: qiuzhi-assistant-web:latest
+    ports:
+      - "80:80"
+  server:
+    image: qiuzhi-assistant-server:latest
+    env_file:
+      - ../server/.env
+    ports:
+      - "8787:8787"
