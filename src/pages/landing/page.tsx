@@ -53,7 +53,7 @@ export default function LandingPage() {
             <img src="/logo.svg" alt="职引简历" className="h-10 w-10 rounded-xl object-contain" />
             <div>
               <div className="text-base font-black text-slate-950">职引简历</div>
-              <div className="text-xs font-bold text-slate-400">AI 求职材料工作台</div>
+              <div className="text-xs font-bold text-slate-400">AI求职工作台</div>
             </div>
           </Link>
           <nav className="hidden items-center gap-6 text-sm font-bold text-slate-600 md:flex">
@@ -85,7 +85,7 @@ export default function LandingPage() {
             <div>
               <h1 className="text-4xl font-black leading-tight text-slate-950 md:text-6xl">
                 职引简历
-                <span className="block text-indigo-600">AI 求职材料工作台</span>
+                <span className="block text-indigo-600">AI求职工作台</span>
               </h1>
               <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-600">
                 面向求职者的简历优化、JD 匹配、自我介绍生成和面试准备工具。把真实经历整理成更清晰、更贴近目标岗位的求职材料。
@@ -271,7 +271,7 @@ export default function LandingPage() {
               <img src="/logo.svg" alt="职引简历" className="h-10 w-10 rounded-xl bg-white object-contain" />
               <div>
                 <div className="text-base font-black">职引简历</div>
-                <div className="text-xs font-bold text-slate-400">AI 求职材料工作台</div>
+                <div className="text-xs font-bold text-slate-400">AI求职工作台</div>
               </div>
             </div>
             <p className="mt-4 max-w-xl text-sm leading-6 text-slate-400">

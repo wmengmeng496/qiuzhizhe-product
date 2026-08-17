@@ -84,7 +84,7 @@ export default function AuthPage() {
             <img src="/logo.svg" alt="职引简历" className="h-11 w-11 rounded-xl object-contain" />
             <div>
               <div className="text-lg font-black text-slate-950">职引简历</div>
-              <div className="text-xs font-bold text-slate-400">AI 求职材料工作台</div>
+              <div className="text-xs font-bold text-slate-400">AI求职工作台</div>
             </div>
           </Link>
           <h1 className="mt-12 max-w-xl text-5xl font-black leading-tight text-slate-950">
