@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
-import { getStoredUser, login, register } from '@/lib/api';
+import { getStoredUser, login, register, sendSmsCode } from '@/lib/api';
 
 export default function AuthPage() {
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [channel, setChannel] = useState<'phone' | 'email'>('phone');
   const [account, setAccount] = useState('');
   const [password, setPassword] = useState('');
+  const [smsCode, setSmsCode] = useState('');
+  const [sendingCode, setSendingCode] = useState(false);
+  const [countdown, setCountdown] = useState(0);
   const [confirmPassword, setConfirmPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [termsAccepted, setTermsAccepted] = useState(false);
@@ -40,6 +43,10 @@ export default function AuthPage() {
       setError('请输入有效的 11 位手机号');
       return;
     }
+    if (mode === 'register' && channel === 'phone' && !/^\d{6}$/.test(smsCode)) {
+      setError('请输入 6 位短信验证码');
+      return;
+    }
     if (channel === 'email' && !isEmail) {
       setError('请输入有效的邮箱地址');
       return;
@@ -66,6 +73,7 @@ export default function AuthPage() {
           password,
           displayName.trim(),
           termsAccepted,
+          channel === 'phone' ? smsCode : undefined,
         );
       }
       navigate(redirect);
@@ -194,6 +202,12 @@ export default function AuthPage() {
               placeholder={channel === 'phone' ? '请输入 11 位手机号' : 'you@example.com'}
             />
           </div>
+          {mode === 'register' && channel === 'phone' && (
+            <div className="flex gap-2">
+              <input value={smsCode} onChange={(e) => setSmsCode(e.target.value.replace(/\D/g, '').slice(0, 6))} className="min-w-0 flex-1 rounded-lg border border-slate-200 px-4 py-3 text-sm font-medium outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50" placeholder="短信验证码" inputMode="numeric" />
+              <button type="button" disabled={sendingCode || countdown > 0} onClick={async () => { const phone = account.trim(); if (!/^1[3-9]\d{9}$/.test(phone)) { setError('请先输入有效手机号'); return; } setSendingCode(true); try { await sendSmsCode(phone); setCountdown(60); const timer = window.setInterval(() => setCountdown((value) => { if (value <= 1) { window.clearInterval(timer); return 0; } return value - 1; }), 1000); setError(''); } catch (err) { setError(err instanceof Error ? err.message : '验证码发送失败'); } finally { setSendingCode(false); } }} className="shrink-0 rounded-lg border border-indigo-200 bg-indigo-50 px-3 text-sm font-black text-indigo-600 disabled:opacity-50">{sendingCode ? '发送中' : countdown > 0 ? `${countdown}s后重发` : '获取验证码'}</button>
+            </div>
+          )}
           <div>
             <label className="mb-1.5 block text-xs font-black text-slate-500">密码</label>
             <input

@@ -12,9 +12,18 @@ import {
 import { query, withTransaction } from './db.js';
 import { asyncHandler, ApiError } from './errors.js';
 import { analyzeInterviewQuestion, generateCareerPhotoWithAi, optimizeResumeWithAi, summarizeInterviewReview } from './ai.js';
-import { assertAndConsumeUsage, assertModelAllowed, getUsage } from './usage.js';
-import { planLimits } from './config.js';
+import { assertAndConsumeUsage, assertModelAllowed, getUsage, refundUsage } from './usage.js';
+import { config, planLimits } from './config.js';
 import { recordEvent } from './events.js';
+import { sendCode } from './sms.js';
+import { aiProvider } from '../config/ai.config.js';
+import {
+  consumeDevResumeUsage,
+  getDevUsage,
+  listDevResumeOptimizations,
+  refundDevResumeUsage,
+  saveDevResumeOptimization,
+} from './dev-store.js';
 
 const router = Router();
 
@@ -22,8 +31,11 @@ const optimizeSchema = z.object({
   resumeContent: z.string().min(20).max(80000),
   jobRequirements: z.string().min(20).max(80000),
   optimizeMode: z.enum(['full', 'project', 'intro', 'experience', 'skills']).default('full'),
-  model: z.string().default('gpt-4o'),
+  model: z.string().default('gpt-5.6-sol'),
   keywordMatch: z.boolean().default(true),
+  jobTitle: z.string().trim().max(120).optional().default(''),
+  company: z.string().trim().max(120).optional().default(''),
+  resumePageImages: z.array(z.string().max(3_000_000)).max(3).optional().default([]),
 });
 
 const interviewSchema = z.object({
@@ -65,12 +77,40 @@ function isDbUnavailable(error) {
   return error?.code === 'ECONNREFUSED'
     || error?.code === 'ENOTFOUND'
     || error?.code === 'ETIMEDOUT'
+    || error?.code === 'EPERM'
+    || error?.code === 'EACCES'
     || Array.isArray(error?.errors);
 }
 
+async function reserveResumeUsage(req) {
+  if (req.devMemoryAuth) return consumeDevResumeUsage(req.user);
+  return withTransaction((client) => assertAndConsumeUsage(client, req.user, 'resume'));
+}
+
+async function refundResumeUsage(req, reservation) {
+  if (req.devMemoryAuth) {
+    refundDevResumeUsage(req.user.id, reservation.period);
+    return;
+  }
+  await withTransaction((client) => refundUsage(client, req.user, 'resume', reservation.period));
+}
+
 router.get('/health', (req, res) => {
-  res.json({ success: true, status: 'ok', time: new Date().toISOString() });
+  res.json({
+    success: true,
+    status: 'ok',
+    service: 'job-assistant-api',
+    release: config.release,
+    time: new Date().toISOString(),
+    ai: {
+      configured: Boolean(config.ai.key),
+      defaultModel: aiProvider.defaultModel,
+      ocrModel: aiProvider.ocrModel,
+    },
+  });
 });
+
+router.post('/auth/sms/send', asyncHandler(sendCode));
 
 function decodeHtmlEntities(value = '') {
   return value
@@ -304,11 +344,7 @@ router.get('/me', requireAuth, asyncHandler(async (req, res) => {
     res.json({
       success: true,
       user: req.user,
-      usage: {
-        resume_optimize_used: 0,
-        interview_review_used: 0,
-        period: new Date().toISOString().slice(0, 7),
-      },
+      usage: getDevUsage(req.user.id),
       limits: planLimits[req.user.plan] || planLimits.free,
     });
     return;
@@ -327,7 +363,15 @@ router.post('/resume-optimizations', requireAuth, asyncHandler(async (req, res) 
   const input = optimizeSchema.parse(req.body);
   assertModelAllowed(req.user, input.model);
 
-  const result = await optimizeResumeWithAi(input);
+  // Reserve quota before paying the upstream AI cost. Refund it if generation fails.
+  const reservation = await reserveResumeUsage(req);
+  let result;
+  try {
+    result = await optimizeResumeWithAi(input);
+  } catch (error) {
+    await refundResumeUsage(req, reservation);
+    throw error;
+  }
   const normalized = {
     originalContent: input.resumeContent,
     optimizedContent: String(result.optimizedContent || ''),
@@ -336,55 +380,78 @@ router.post('/resume-optimizations', requireAuth, asyncHandler(async (req, res) 
     improvements: Array.isArray(result.improvements) ? result.improvements.map(String) : [],
     matchScore: Number.isFinite(Number(result.matchScore)) ? Math.max(0, Math.min(100, Number(result.matchScore))) : 75,
     mode: input.optimizeMode,
+    model: String(result.model || input.model),
   };
 
   if (!normalized.optimizedContent) {
+    await refundResumeUsage(req, reservation);
     throw new ApiError(502, 'AI 没有返回优化后的简历内容');
   }
 
-  let saved;
   try {
-    saved = await withTransaction(async (client) => {
-      await assertAndConsumeUsage(client, req.user, 'resume');
-      const insert = await client.query(
-        `insert into resume_optimizations
-         (user_id, job_requirements, resume_content, optimize_mode, model, optimized_content,
-          highlighted_content, keywords, improvements, match_score, status)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'completed')
-         returning id, created_at`,
-        [
-          req.user.id,
-          input.jobRequirements,
-          input.resumeContent,
-          input.optimizeMode,
-          input.model,
-          normalized.optimizedContent,
-          normalized.highlightedContent,
-          JSON.stringify(normalized.keywords),
-          JSON.stringify(normalized.improvements),
-          normalized.matchScore,
-        ],
-      );
-      return insert.rows[0];
+    const saved = req.devMemoryAuth
+      ? saveDevResumeOptimization(req.user.id, {
+        job_title: input.jobTitle || null,
+        company: input.company || null,
+        job_requirements: input.jobRequirements,
+        resume_content: input.resumeContent,
+        optimize_mode: input.optimizeMode,
+        model: normalized.model,
+        optimized_content: normalized.optimizedContent,
+        highlighted_content: normalized.highlightedContent,
+        keywords: normalized.keywords,
+        improvements: normalized.improvements,
+        match_score: normalized.matchScore,
+      })
+      : await withTransaction(async (client) => {
+        const insert = await client.query(
+          `insert into resume_optimizations
+           (user_id, job_requirements, resume_content, optimize_mode, model, optimized_content,
+            highlighted_content, keywords, improvements, match_score, status, job_title, company)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'completed',$11,$12)
+           returning id, created_at`,
+          [
+            req.user.id,
+            input.jobRequirements,
+            input.resumeContent,
+            input.optimizeMode,
+            normalized.model,
+            normalized.optimizedContent,
+            normalized.highlightedContent,
+            JSON.stringify(normalized.keywords),
+            JSON.stringify(normalized.improvements),
+            normalized.matchScore,
+            input.jobTitle || null,
+            input.company || null,
+          ],
+        );
+        return insert.rows[0];
+      });
+    if (!req.devMemoryAuth) {
+      await recordEvent(req, {
+        userId: req.user.id,
+        eventType: 'resume.optimize.completed',
+        entityType: 'resume_optimization',
+        entityId: saved.id,
+        metadata: { mode: input.optimizeMode, model: normalized.model, matchScore: normalized.matchScore },
+      });
+    }
+    res.status(201).json({
+      success: true,
+      result: {
+        id: saved.id,
+        createdAt: saved.created_at,
+        usage: reservation,
+        model: normalized.model,
+        jobTitle: input.jobTitle || null,
+        company: input.company || null,
+        ...normalized,
+      },
     });
   } catch (error) {
-    if (!req.devMemoryAuth || !isDbUnavailable(error)) throw error;
-    saved = { id: `local-${Date.now()}`, created_at: new Date().toISOString() };
+    await refundResumeUsage(req, reservation);
+    throw error;
   }
-
-  try {
-    await recordEvent(req, {
-      userId: req.user.id,
-      eventType: 'resume.optimize.completed',
-      entityType: 'resume_optimization',
-      entityId: saved.id,
-      metadata: { mode: input.optimizeMode, model: input.model, matchScore: normalized.matchScore },
-    });
-  } catch (error) {
-    if (!req.devMemoryAuth || !isDbUnavailable(error)) throw error;
-  }
-
-  res.status(201).json({ success: true, result: { id: saved.id, createdAt: saved.created_at, ...normalized } });
 }));
 
 router.post('/career-assets/photo', requireAuth, asyncHandler(async (req, res) => {
@@ -435,6 +502,10 @@ router.get('/orders', requireAuth, asyncHandler(async (req, res) => {
 }));
 
 router.get('/resume-optimizations', requireAuth, asyncHandler(async (req, res) => {
+  if (req.devMemoryAuth) {
+    res.json({ success: true, items: listDevResumeOptimizations(req.user.id) });
+    return;
+  }
   const result = await query(
     `select id, job_title, company, job_requirements, resume_content, optimize_mode, model,
             optimized_content, highlighted_content, keywords, improvements, match_score, status, created_at

@@ -11,10 +11,11 @@ export const aiProvider = {
   apiKey: process.env.TOAPIS_API_KEY || process.env.CUSTOM_PROXY_KEY || '',
   timeoutMs: Number(process.env.AI_TIMEOUT_MS || 60000),
   imageTimeoutMs: Number(process.env.AI_IMAGE_TIMEOUT_MS || 180000),
-  defaultModel: process.env.AI_DEFAULT_MODEL || process.env.TOAPIS_DEFAULT_MODEL || 'gpt-5.4',
+  defaultModel: process.env.AI_DEFAULT_MODEL || process.env.TOAPIS_DEFAULT_MODEL || 'gpt-5.6-sol',
+  ocrModel: process.env.AI_OCR_MODEL || process.env.TOAPIS_OCR_MODEL || 'gpt-5.6-sol',
   imageModel: process.env.AI_IMAGE_MODEL || process.env.TOAPIS_IMAGE_MODEL || 'gpt-image-2',
   fallbackModels: [
-    ...(process.env.AI_FALLBACK_MODELS || 'gpt-5.4,gpt-5.5')
+    ...(process.env.AI_FALLBACK_MODELS || 'gpt-5.5,gpt-4o')
       .split(',')
       .map((item) => item.trim())
       .filter(Boolean),
@@ -27,6 +28,7 @@ export const aiProvider = {
 export const aiModelMap = {
   'server-default': aiProvider.defaultModel,
   default: aiProvider.defaultModel,
+  'gpt-5.6-sol': 'gpt-5.6-sol',
   'gpt-5.5': 'gpt-5.5',
   'gpt-5.4': 'gpt-5.4',
   'gpt-4': 'gpt-4',

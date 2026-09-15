@@ -24,6 +24,26 @@ function uniqueModels(models) {
   return [...new Set(models.map(resolveModel).filter(Boolean))];
 }
 
+function contentSimilarity(left = '', right = '') {
+  const normalize = (value) => String(value).replace(/\s+/g, '').toLowerCase();
+  const a = normalize(left);
+  const b = normalize(right);
+  if (!a || !b) return 1;
+  const grams = (value) => {
+    const result = new Map();
+    for (let index = 0; index < value.length - 1; index += 1) {
+      const gram = value.slice(index, index + 2);
+      result.set(gram, (result.get(gram) || 0) + 1);
+    }
+    return result;
+  };
+  const aGrams = grams(a);
+  const bGrams = grams(b);
+  let overlap = 0;
+  for (const [gram, count] of aGrams) overlap += Math.min(count, bGrams.get(gram) || 0);
+  return (2 * overlap) / Math.max(a.length + b.length - 2, 1);
+}
+
 function shouldTryNextModel(status, detail) {
   return (
     status === 404 ||
@@ -52,6 +72,21 @@ function dataUrlToImage(dataUrl = '') {
   }
 
   return { buffer, mimeType };
+}
+
+function dataUrlToVisionPart(dataUrl = '') {
+  const match = String(dataUrl).match(/^data:(image\/(?:png|jpeg|jpg|webp));base64,(.+)$/);
+  if (!match) {
+    throw new ApiError(400, 'PDF 页面图片格式不正确');
+  }
+  return { type: 'image_url', image_url: { url: dataUrl, detail: 'high' } };
+}
+
+function looksReadableResumeText(text = '') {
+  const compact = String(text).replace(/\s/g, '');
+  const cjk = (compact.match(/[\u4e00-\u9fa5]/g) || []).length;
+  const meaningfulWords = (String(text).match(/[A-Za-z]{2,}|[\u4e00-\u9fa5]{2,}/g) || []).length;
+  return String(text).trim().length >= 40 && (cjk >= 12 || meaningfulWords >= 8);
 }
 
 function parseAiErrorDetail(text) {
@@ -155,6 +190,36 @@ async function generateImageFromPrompt({ prompt, model, signal }) {
   throw new ApiError(502, '图片生成服务没有返回图片');
 }
 
+async function extractResumeTextFromImages({ pageImages, model = aiProvider.ocrModel }) {
+  if (!Array.isArray(pageImages) || pageImages.length === 0) return '';
+
+  const messages = [
+    {
+      role: 'system',
+      content: '你是专业简历文本识别助手。必须从图片中尽可能完整、准确地提取简历文字，保留原有顺序、标题、项目符号、日期和联系方式，只返回严格 JSON。',
+    },
+    {
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          text: `请识别以下 PDF 页面图片中的全部可见简历文字，并输出 JSON：\n{\n  "text": "按原顺序整理后的完整文本"\n}\n\n要求：\n1. 尽量保留原文，不要改写语义。\n2. 按页面和阅读顺序输出。\n3. 版式可简化，但不要漏掉姓名、岗位、经历、项目、技能和联系方式。\n4. 如果有少量看不清的字，请用“[不清晰]”标记，不要编造。`,
+        },
+        ...pageImages.map((dataUrl) => dataUrlToVisionPart(dataUrl)),
+      ],
+    },
+  ];
+
+  const result = await callAiJson({
+    model,
+    messages,
+    temperature: 0.1,
+    maxTokens: 2500,
+  });
+
+  return String(result?.text || '').trim();
+}
+
 export async function callAiJson({ model, messages, temperature = 0.5, maxTokens = 4000 }) {
   if (!config.ai.key) {
     throw new ApiError(503, 'AI 服务还没有配置密钥，请先配置 TOAPIS_API_KEY 或 CUSTOM_PROXY_KEY');
@@ -185,6 +250,7 @@ export async function callAiJson({ model, messages, temperature = 0.5, maxTokens
           temperature,
           max_tokens: maxTokens,
           response_format: aiProvider.responseFormat,
+          ...(activeModel.startsWith('gpt-5.6') ? { reasoning_effort: 'none' } : {}),
         }),
       });
 
@@ -210,11 +276,18 @@ export async function callAiJson({ model, messages, temperature = 0.5, maxTokens
         continue;
       }
 
-      return extractJson(content);
+      return {
+        ...extractJson(content),
+        model: data?.model || activeModel,
+      };
     } catch (error) {
       if (error?.name === 'AbortError') {
         errors.push(`${activeModel}: 请求超时`);
         continue;
+      }
+      if (!(error instanceof ApiError)) {
+        errors.push(`${activeModel}: AI 网关连接失败`);
+        break;
       }
       throw error;
     } finally {
@@ -307,24 +380,49 @@ export async function generateCareerPhotoWithAi(input) {
 }
 
 export async function optimizeResumeWithAi(input) {
+  let resumeContent = String(input.resumeContent || '').trim();
+  if (!looksReadableResumeText(resumeContent) && Array.isArray(input.resumePageImages) && input.resumePageImages.length > 0) {
+    const ocrText = await extractResumeTextFromImages({ pageImages: input.resumePageImages });
+    if (looksReadableResumeText(ocrText)) {
+      resumeContent = ocrText;
+    }
+  }
+
   const modeInstruction = resumeOptimizeModes[input.optimizeMode] || resumeOptimizeModes.full;
   const prompts = aiPrompts.resumeOptimize;
-
-  return callAiJson({
+  const messages = [
+    { role: 'system', content: prompts.system },
+    { role: 'user', content: prompts.user({ input: { ...input, resumeContent }, modeInstruction }) },
+  ];
+  let result = await callAiJson({
     model: input.model,
     temperature: aiDefaults.resumeOptimize.temperature,
     maxTokens: aiDefaults.resumeOptimize.maxTokens,
-    messages: [
-      {
-        role: 'system',
-        content: prompts.system,
-      },
-      {
-        role: 'user',
-        content: prompts.user({ input, modeInstruction }),
-      },
-    ],
+    messages,
   });
+
+  // A model occasionally echoes the source resume. Require a meaningful edit and
+  // give it one focused rewrite pass before accepting the result.
+  const source = resumeContent;
+  const optimized = String(result?.optimizedContent || '').trim();
+  if (contentSimilarity(source, optimized) > 0.94) {
+    result = await callAiJson({
+      model: input.model,
+      temperature: 0.65,
+      maxTokens: aiDefaults.resumeOptimize.maxTokens,
+      messages: [
+        ...messages,
+        {
+          role: 'user',
+          content: '上一版与原简历差异不足，不能原样复述。请重新改写目标模块，至少修改 8 处具体表达，并在 improvements 中列出实际修改点；不得编造事实。',
+        },
+      ],
+    });
+  }
+  if (contentSimilarity(source, String(result?.optimizedContent || '')) > 0.94) {
+    throw new ApiError(502, 'AI 返回的优化稿与原简历差异不足，已取消本次并退回额度');
+  }
+  return result;
 }
 
 export async function analyzeInterviewQuestion(input) {

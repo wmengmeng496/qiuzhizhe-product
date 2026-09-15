@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { clearSession, getMe, getStoredUser, type CurrentUser } from '@/lib/api';
 
 const MENU = [
+  { label: '简历优化', icon: 'ri-file-list-3-line', path: '/resume-optimizer' },
   { label: '求职工作台', icon: 'ri-chat-3-line', path: '/workspace' },
   { label: '面试助手', icon: 'ri-chat-quote-line', path: '/interview-prep' },
   { label: '优化记录', icon: 'ri-history-line', path: '/optimization-history' },
@@ -12,8 +13,8 @@ const MENU = [
 ];
 
 const PAGE_TITLES: Record<string, string> = {
+  '/resume-optimizer': '简历优化',
   '/workspace': '求职工作台',
-  '/resume-optimizer': '求职工作台',
   '/interview-prep': '面试助手',
   '/optimization-history': '优化记录',
   '/career-assets': '职业形象',

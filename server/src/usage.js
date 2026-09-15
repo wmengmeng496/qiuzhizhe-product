@@ -18,18 +18,30 @@ export async function getUsage(client, userId) {
 }
 
 export async function assertAndConsumeUsage(client, user, kind) {
-  const usage = await getUsage(client, user.id);
   const limits = planLimits[user.plan] || planLimits.free;
   const column = kind === 'resume' ? 'resume_optimize_used' : 'interview_review_used';
   const limit = kind === 'resume' ? limits.resumeOptimize : limits.interviewReview;
-
-  if (usage[column] >= limit) {
+  const period = currentPeriod();
+  await getUsage(client, user.id);
+  const result = await client.query(
+    `update usage_quotas
+     set ${column} = ${column} + 1, updated_at = now()
+     where user_id = $1 and period = $2 and ${column} < $3
+     returning ${column}`,
+    [user.id, period, limit],
+  );
+  if (result.rowCount === 0) {
     throw new ApiError(402, `本月次数已用完，当前套餐上限为 ${limit} 次`);
   }
+  return { period, used: result.rows[0][column], limit };
+}
 
+export async function refundUsage(client, user, kind, period = currentPeriod()) {
+  const column = kind === 'resume' ? 'resume_optimize_used' : 'interview_review_used';
   await client.query(
-    `update usage_quotas set ${column} = ${column} + 1 where user_id = $1 and period = $2`,
-    [user.id, usage.period],
+    `update usage_quotas set ${column} = greatest(${column} - 1, 0), updated_at = now()
+     where user_id = $1 and period = $2`,
+    [user.id, period],
   );
 }
 

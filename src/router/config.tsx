@@ -3,6 +3,7 @@ import { Navigate, useLocation } from "react-router-dom";
 import NotFound from "../pages/NotFound";
 import Landing from "../pages/landing/page";
 import Home from "../pages/home/page";
+import ResumeOptimizer from "../pages/resume-optimizer/page";
 import InterviewPrep from "../pages/interview-prep/page";
 import OptimizationHistory from "../pages/optimization-history/page";
 import Membership from "../pages/membership/page";
@@ -33,7 +34,7 @@ const routes: RouteObject[] = [
   },
   {
     path: "/resume-optimizer",
-    element: <Navigate to="/workspace" replace />,
+    element: <RequireAuth><ResumeOptimizer /></RequireAuth>,
   },
   {
     path: "/interview-prep",

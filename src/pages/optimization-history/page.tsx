@@ -27,6 +27,7 @@ const MODE_LABELS: Record<string, string> = {
 };
 
 const MODEL_NAMES: Record<string, string> = {
+  'gpt-5.6-sol': 'GPT-5.6 Sol',
   'gpt-4': 'GPT-4',
   'gpt-4o': 'GPT-4o',
   'gpt-3.5': 'GPT-3.5',

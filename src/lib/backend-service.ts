@@ -7,6 +7,9 @@ export interface ResumeOptimizationPayload {
   optimizeMode: OptimizeMode;
   model: string;
   keywordMatch: boolean;
+  jobTitle?: string;
+  company?: string;
+  resumePageImages?: string[];
 }
 
 export interface BackendOptimizationResult {
@@ -18,6 +21,9 @@ export interface BackendOptimizationResult {
   improvements: string[];
   matchScore: number;
   mode: OptimizeMode;
+  model?: string;
+  jobTitle?: string | null;
+  company?: string | null;
   createdAt: string;
 }
 

@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 import { createResumeOptimization } from '@/lib/backend-service';
 import { fetchJobDescription, getStoredUser } from '@/lib/api';
+import { extractPdfText } from '@/lib/pdf-reader';
+import { extractDocxText } from '@/lib/docx-reader';
 import type { OptimizeMode } from '../resume-optimizer/page';
 
 type ResumeStyle = 'clean' | 'tech' | 'consulting' | 'dark';
 type ResumePreviewMode = 'optimized' | 'original' | 'compare';
-type WorkspaceModel = 'server-default' | 'gpt-5.4' | 'gpt-5.5' | 'gpt-4o';
+type WorkspaceModel = 'server-default' | 'gpt-5.6-sol' | 'gpt-5.4' | 'gpt-5.5' | 'gpt-4o';
 
 interface ResumeResult {
   optimizedContent: string;
@@ -116,7 +117,8 @@ const DEFAULT_COMMAND = '继续优化项目经历，并保持和 JD 关键词匹
 const DEFAULT_WORKSPACE_MODEL: WorkspaceModel = 'server-default';
 
 const WORKSPACE_MODELS: Array<{ id: WorkspaceModel; name: string; desc: string; badge: string; credits: number }> = [
-  { id: 'server-default', name: '智能默认', desc: '优先使用线上默认模型，自动走兜底策略', badge: '推荐', credits: 1 },
+  { id: 'server-default', name: '智能默认', desc: '优先使用 GPT-5.6 Sol，自动走兜底策略', badge: '推荐', credits: 1 },
+  { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', desc: '高质量复杂简历分析与定向改写', badge: '旗舰', credits: 3 },
   { id: 'gpt-5.4', name: 'GPT-5.4', desc: '质量优先，适合完整简历和复杂 JD', badge: '高质量', credits: 2 },
   { id: 'gpt-5.5', name: 'GPT-5.5', desc: '更强推理，适合高要求岗位', badge: '深度', credits: 3 },
   { id: 'gpt-4o', name: 'GPT-4o', desc: '速度优先；若账号未配置会提示失败', badge: '快速', credits: 1 },
@@ -1058,10 +1060,6 @@ function prepareUploadedResumeContent(rawText: string, fileName: string) {
   };
 }
 
-function isPdfTextItem(item: unknown): item is { str: string; transform?: number[] } {
-  return typeof (item as { str?: unknown }).str === 'string';
-}
-
 function getUploadIcon(type: string) {
   if (/pdf/i.test(type)) return 'ri-file-pdf-2-line';
   if (/word|doc/i.test(type)) return 'ri-file-word-2-line';
@@ -1089,68 +1087,17 @@ async function readTextFile(file: File) {
   });
 }
 
-async function readArrayBuffer(file: File) {
-  return new Promise<ArrayBuffer>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (reader.result instanceof ArrayBuffer) resolve(reader.result);
-      else reject(new Error('文件读取失败，请重试'));
-    };
-    reader.onerror = () => reject(new Error('文件读取失败，请重试'));
-    reader.readAsArrayBuffer(file);
-  });
-}
-
-async function extractPdfText(file: File) {
-  const pdfjs = await import('pdfjs-dist');
-  pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
-  const data = await readArrayBuffer(file);
-  const pdf = await pdfjs.getDocument({ data }).promise;
-  const pages: string[] = [];
-  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-    const page = await pdf.getPage(pageNumber);
-    const content = await page.getTextContent();
-    const textItems = content.items as unknown[];
-    const rows = textItems
-      .filter(isPdfTextItem)
-      .filter((item) => item.str.trim())
-      .map((item) => ({
-        text: item.str.trim(),
-        x: item.transform?.[4] ?? 0,
-        y: item.transform?.[5] ?? 0,
-      }))
-      .sort((a, b) => Math.abs(b.y - a.y) > 2 ? b.y - a.y : a.x - b.x)
-      .reduce<Array<{ y: number; parts: Array<{ x: number; text: string }> }>>((acc, item) => {
-        const row = acc.find((candidate) => Math.abs(candidate.y - item.y) <= 2);
-        if (row) {
-          row.parts.push({ x: item.x, text: item.text });
-        } else {
-          acc.push({ y: item.y, parts: [{ x: item.x, text: item.text }] });
-        }
-        return acc;
-      }, []);
-
-    pages.push(rows
-      .map((row) => row.parts.sort((a, b) => a.x - b.x).map((part) => part.text).join(' '))
-      .join('\n'));
-  }
-  return normalizeExtractedText(pages.join('\n\n'));
-}
-
-async function extractDocxText(file: File) {
-  const mammoth = await import('mammoth/mammoth.browser');
-  const arrayBuffer = await readArrayBuffer(file);
-  const result = await mammoth.extractRawText({ arrayBuffer });
-  return normalizeExtractedText(result.value);
-}
-
 async function extractResumeText(file: File) {
-  const ext = getFileExtension(file.name);
-  if (['.txt', '.md', '.markdown', '.csv', '.json'].includes(ext)) return normalizeExtractedText(await readTextFile(file));
-  if (ext === '.pdf' || file.type.includes('pdf')) return extractPdfText(file);
-  if (ext === '.docx' || file.type.includes('wordprocessingml')) return extractDocxText(file);
-  if (ext === '.doc') throw new Error('暂不支持旧版 .doc，请另存为 .docx 后上传');
-  throw new Error('不支持该文件格式，请上传 PDF、DOCX、TXT 或 MD');
+  try {
+    const ext = getFileExtension(file.name);
+    if (['.txt', '.md', '.markdown', '.csv', '.json'].includes(ext)) return normalizeExtractedText(await readTextFile(file));
+    if (ext === '.pdf' || file.type.includes('pdf')) return await extractPdfText(file);
+    if (ext === '.docx' || file.type.includes('wordprocessingml')) return await extractDocxText(file);
+    if (ext === '.doc') throw new Error('暂不支持旧版 .doc，请另存为 .docx 后上传');
+    throw new Error('不支持该文件格式，请上传 PDF、DOCX、TXT 或 MD');
+  } catch (err) {
+    throw err instanceof Error ? err : new Error('简历读取失败，请重试');
+  }
 }
 
 function deriveSessionTitle(resumeContent: string, messages: ChatMessage[], fallback: string) {
@@ -2499,24 +2446,12 @@ ${trimmedInstruction}`,
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : '优化失败，请稍后再试';
       const fallbackResult = createLocalOptimizationDemoResult(baseResumeContent, jobRequirements, nextMode, trimmedInstruction);
-      setResult(fallbackResult);
-      rememberOptimizationRecord(buildRecordFromResult({
-        result: fallbackResult,
-        jobTarget,
-        mode: nextMode,
-        optimizedContent: fallbackResult.optimizedContent,
-      }));
       addMessage({
         role: 'assistant',
-        content: `AI 生成暂时失败：${errorMessage}\n\n我已先生成一个本地演示优化版本，方便你检查主流程、版本对比和 JD 匹配展示。`,
+        content: `AI 生成暂时失败：${errorMessage}\n\n本次未生成正式优化稿，也未扣除额度。下面仅显示优化建议预览，不能作为投递版本。`,
       });
-      addResumeVersionMessage(
-        fallbackResult,
-        nextMode,
-        '已生成本地演示优化版本',
-        baseResumeContent,
-      );
-      showToast('AI 暂不可用，已生成本地演示版本');
+      setResult({ ...fallbackResult, optimizedContent: baseResumeContent });
+      showToast('AI 暂不可用，本次未扣除额度');
     } finally {
       setLoading(false);
       setStatusText('');
