@@ -9,7 +9,7 @@ services:
       server:
         condition: service_healthy
     ports:
-      - "80:80"
+      - "127.0.0.1:8080:80"
   server:
     build:
       context: ..

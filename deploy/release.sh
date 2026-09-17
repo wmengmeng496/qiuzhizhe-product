@@ -21,7 +21,7 @@ export APP_RELEASE
 docker compose -f deploy/docker-compose.prod.yml up -d --build --remove-orphans
 docker compose -f deploy/docker-compose.prod.yml ps
 
-health_url=${HEALTH_URL:-http://127.0.0.1/api/health}
+health_url=${HEALTH_URL:-http://127.0.0.1:8080/api/health}
 attempt=1
 while [ "$attempt" -le 20 ]; do
   health_response=$(curl -fsS "$health_url" 2>/dev/null || true)
