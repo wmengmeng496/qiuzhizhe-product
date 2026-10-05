@@ -499,26 +499,30 @@ export async function optimizeResumeWithAi(input) {
     result.extractedResumeContent = extractedOcrText;
   }
 
-  // A model occasionally echoes the source resume. Require a meaningful edit and
-  // give it one focused rewrite pass before accepting the result.
+  // A model occasionally echoes the source resume. If similarity is very high, give it one focused rewrite pass.
+  // Do not abruptly throw 502 to user if similarity is slightly high, accept the result or rewrite.
   const source = resumeContent;
   const optimized = String(result?.optimizedContent || '').trim();
-  if (contentSimilarity(source, optimized) > 0.94) {
-    result = await callAiJson({
-      model: input.model,
-      temperature: 0.65,
-      maxTokens: aiDefaults.resumeOptimize.maxTokens,
-      messages: [
-        ...messages,
-        {
-          role: 'user',
-          content: '上一版与原简历差异不足，不能原样复述。请重新改写目标模块，至少修改 8 处具体表达，并在 improvements 中列出实际修改点；不得编造事实。',
-        },
-      ],
-    });
-  }
-  if (contentSimilarity(source, String(result?.optimizedContent || '')) > 0.94) {
-    throw new ApiError(502, 'AI 返回的优化稿与原简历差异不足，已取消本次并退回额度');
+  if (contentSimilarity(source, optimized) > 0.96) {
+    try {
+      const secondPass = await callAiJson({
+        model: input.model || aiProvider.defaultModel,
+        temperature: 0.65,
+        maxTokens: aiDefaults.resumeOptimize.maxTokens,
+        messages: [
+          ...messages,
+          {
+            role: 'user',
+            content: '上一版与原简历差异不足，不能原样复述。请针对目标岗位重点改写项目经历、技能与工作职责表达，至少修改 8 处具体语句；不得凭空捏造经历。',
+          },
+        ],
+      });
+      if (secondPass?.optimizedContent) {
+        result = secondPass;
+      }
+    } catch (e) {
+      console.warn('[ai:resume] Second pass rewrite failed:', e.message);
+    }
   }
   return result;
 }
