@@ -463,7 +463,7 @@ router.post('/resume-optimizations', rateLimit({ windowMs: 60_000, max: 10, mess
     throw error;
   }
   const normalized = {
-    originalContent: input.resumeContent,
+    originalContent: result.extractedResumeContent || input.resumeContent,
     optimizedContent: String(result.optimizedContent || ''),
     highlightedContent: result.highlightedContent ? String(result.highlightedContent) : null,
     keywords: Array.isArray(result.keywords) ? result.keywords.map(String) : [],
@@ -503,7 +503,7 @@ router.post('/resume-optimizations', rateLimit({ windowMs: 60_000, max: 10, mess
           [
             req.user.id,
             input.jobRequirements,
-            input.resumeContent,
+            normalized.originalContent,
             input.optimizeMode,
             normalized.model,
             normalized.optimizedContent,

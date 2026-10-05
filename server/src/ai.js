@@ -304,6 +304,7 @@ export async function callAiJson({ model, messages, temperature = 0.5, maxTokens
     const timer = setTimeout(() => controller.abort(), remainingMs);
 
     try {
+      const isGemini = String(activeModel).toLowerCase().includes('gemini');
       const response = await fetch(config.ai.url, {
         method: 'POST',
         signal: controller.signal,
@@ -316,7 +317,7 @@ export async function callAiJson({ model, messages, temperature = 0.5, maxTokens
           messages: protectedPayload.messages,
           temperature,
           max_tokens: maxTokens,
-          response_format: aiProvider.responseFormat,
+          ...(isGemini ? {} : { response_format: aiProvider.responseFormat }),
           ...(activeModel.startsWith('gpt-5.6') ? { reasoning_effort: 'none' } : {}),
         }),
       });
@@ -448,10 +449,12 @@ export async function generateCareerPhotoWithAi(input) {
 
 export async function optimizeResumeWithAi(input) {
   let resumeContent = String(input.resumeContent || '').trim();
+  let extractedOcrText = '';
   if (!looksReadableResumeText(resumeContent) && Array.isArray(input.resumePageImages) && input.resumePageImages.length > 0) {
     const ocrText = await extractResumeTextFromImages({ pageImages: input.resumePageImages });
     if (looksReadableResumeText(ocrText)) {
       resumeContent = ocrText;
+      extractedOcrText = ocrText;
     }
   }
 
@@ -467,6 +470,10 @@ export async function optimizeResumeWithAi(input) {
     maxTokens: aiDefaults.resumeOptimize.maxTokens,
     messages,
   });
+
+  if (extractedOcrText) {
+    result.extractedResumeContent = extractedOcrText;
+  }
 
   // A model occasionally echoes the source resume. Require a meaningful edit and
   // give it one focused rewrite pass before accepting the result.
