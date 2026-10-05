@@ -261,9 +261,10 @@ export async function callAiJson({ model, messages, temperature = 0.5, maxTokens
       const text = await response.text();
       if (!response.ok) {
         const detail = parseAiErrorDetail(text);
+        console.error('[ai:upstream_error]', response.status, detail.code, detail.message, text.slice(0, 300));
         errors.push('模型不可用');
         if (shouldTryNextModel(response.status, `${detail.code} ${detail.message}`)) continue;
-        throw new ApiError(502, '上游 AI 服务暂时不可用，请稍后再试');
+        throw new ApiError(502, `上游 AI 服务报错 (${response.status})：${detail.message}`);
       }
 
       let data;
