@@ -8,10 +8,31 @@ function extractJson(content) {
     return JSON.parse(content);
   } catch {
     const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (fenced) return JSON.parse(fenced[1].trim());
+    if (fenced) {
+      try {
+        return JSON.parse(fenced[1].trim());
+      } catch {}
+    }
 
-    const object = content.match(/\{[\s\S]*\}/);
-    if (object) return JSON.parse(object[0]);
+    const firstBrace = content.indexOf('{');
+    const lastBrace = content.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+      try {
+        return JSON.parse(content.slice(firstBrace, lastBrace + 1));
+      } catch {}
+    }
+
+    // If still fails, try unescaping common broken JSON strings
+    try {
+      const cleaned = content.replace(/[\u0000-\u001F]+/g, ' ');
+      const match = cleaned.match(/\{[\s\S]*\}/);
+      if (match) return JSON.parse(match[0]);
+    } catch {}
+
+    // Special fallback for OCR response: if it's raw text, wrap it into { text: content }
+    if (typeof content === 'string' && content.trim().length > 30) {
+      return { text: content.trim() };
+    }
 
     throw new ApiError(502, 'AI 返回内容无法解析为 JSON');
   }
