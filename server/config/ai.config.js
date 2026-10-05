@@ -31,17 +31,17 @@ export const aiProvider = {
 export const aiModelMap = {
   'server-default': aiProvider.defaultModel,
   default: aiProvider.defaultModel,
-  'gpt-5.6-sol': 'gpt-5.6-sol',
-  'gpt-5.5': 'gpt-5.5',
-  'gpt-5.4': 'gpt-5.4',
-  'gpt-4': 'gpt-4',
-  'gpt-4o': 'gpt-4o',
-  'gpt-4o-mini': 'gpt-4o-mini',
-  'gpt-3.5': 'gpt-3.5-turbo',
-  'gpt-3.5-turbo': 'gpt-3.5-turbo',
+  'gpt-5.6-sol': 'gemini-3.6-flash',
+  'gpt-5.5': 'gemini-3.6-flash',
+  'gpt-5.4': 'gemini-3.6-flash',
+  'gpt-4': 'gemini-3.6-flash',
+  'gpt-4o': 'gemini-3.6-flash',
+  'gpt-4o-mini': 'gemini-3.6-flash',
+  'gpt-3.5': 'gemini-3.6-flash',
+  'gpt-3.5-turbo': 'gemini-3.6-flash',
   'claude-3': 'claude-3-opus',
   'claude-3.5': 'claude-3.5-sonnet',
-  'gemini-pro': 'gemini-pro',
+  'gemini-pro': 'gemini-3.6-flash',
 };
 
 export const aiDefaults = {
