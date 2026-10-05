@@ -210,14 +210,77 @@ async function extractResumeTextFromImages({ pageImages, model = aiProvider.ocrM
     },
   ];
 
-  const result = await callAiJson({
+  // Try OCR model first; if fails, fall back to gemini-3.6-flash or gpt-5.6-sol
+  const modelsToTry = uniqueModels([
     model,
-    messages,
-    temperature: 0.1,
-    maxTokens: 2500,
-  });
+    'gemini-3.6-flash',
+    'gpt-5.6-sol',
+  ]);
 
-  return String(result?.text || '').trim();
+  for (const activeModel of modelsToTry) {
+    try {
+      const result = await callAiJsonDirect({
+        model: activeModel,
+        messages,
+        temperature: 0.1,
+        maxTokens: 2500,
+      });
+      const text = String(result?.text || '').trim();
+      if (text.length > 20) {
+        console.log(`[ai:ocr] Successfully extracted ${text.length} chars using model ${activeModel}`);
+        return text;
+      }
+    } catch (err) {
+      console.warn(`[ai:ocr] Model ${activeModel} failed: ${err.message}`);
+    }
+  }
+
+  return '';
+}
+
+async function callAiJsonDirect({ model, messages, temperature = 0.5, maxTokens = 4000 }) {
+  if (!config.ai.key) {
+    throw new ApiError(503, 'AI 服务还没有配置密钥，请先配置 TOAPIS_API_KEY 或 CUSTOM_PROXY_KEY');
+  }
+
+  const protectedPayload = redactAiMessages(messages);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60000);
+
+  try {
+    const isGemini = String(model).toLowerCase().includes('gemini');
+    const response = await fetch(config.ai.url, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${config.ai.key}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        messages: protectedPayload.messages,
+        temperature,
+        max_tokens: maxTokens,
+        ...(isGemini ? {} : { response_format: aiProvider.responseFormat }),
+        ...(model.startsWith('gpt-5.6') ? { reasoning_effort: 'none' } : {}),
+      }),
+    });
+
+    const text = await response.text();
+    if (!response.ok) {
+      const detail = parseAiErrorDetail(text);
+      console.error('[ai:direct_error]', model, response.status, detail.message);
+      throw new ApiError(502, detail.message);
+    }
+
+    const data = JSON.parse(text);
+    const content = data?.choices?.[0]?.message?.content;
+    if (!content) throw new ApiError(502, 'AI 返回内容为空');
+
+    return extractJson(content);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function callAiJson({ model, messages, temperature = 0.5, maxTokens = 4000 }) {

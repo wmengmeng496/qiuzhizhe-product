@@ -15,15 +15,15 @@ export const aiProvider = {
   timeoutMs: boundedTimeout(process.env.AI_TIMEOUT_MS, 90000, 180000),
   imageTimeoutMs: boundedTimeout(process.env.AI_IMAGE_TIMEOUT_MS, 180000, 300000),
   defaultModel: process.env.AI_DEFAULT_MODEL || process.env.TOAPIS_DEFAULT_MODEL || 'gpt-5.6-sol',
-  ocrModel: process.env.AI_OCR_MODEL || process.env.TOAPIS_OCR_MODEL || 'gpt-4o',
+  ocrModel: process.env.AI_OCR_MODEL || process.env.TOAPIS_OCR_MODEL || 'gemini-3.6-flash',
   imageModel: process.env.AI_IMAGE_MODEL || process.env.TOAPIS_IMAGE_MODEL || 'gpt-image-2',
   fallbackModels: [
-    ...(process.env.AI_FALLBACK_MODELS || 'gpt-5.5,gpt-4o')
+    ...(process.env.AI_FALLBACK_MODELS || 'gpt-5.6-sol,gemini-3.6-flash')
       .split(',')
       .map((item) => item.trim())
       .filter(Boolean),
-    'gpt-4o',
-    'gpt-4o-mini',
+    'gpt-5.6-sol',
+    'gemini-3.6-flash',
   ],
   responseFormat: { type: 'json_object' },
 };
