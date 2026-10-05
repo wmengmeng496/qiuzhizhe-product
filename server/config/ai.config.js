@@ -15,7 +15,7 @@ export const aiProvider = {
   timeoutMs: boundedTimeout(process.env.AI_TIMEOUT_MS, 90000, 180000),
   imageTimeoutMs: boundedTimeout(process.env.AI_IMAGE_TIMEOUT_MS, 180000, 300000),
   defaultModel: process.env.AI_DEFAULT_MODEL || process.env.TOAPIS_DEFAULT_MODEL || 'gpt-5.6-sol',
-  ocrModel: process.env.AI_OCR_MODEL || process.env.TOAPIS_OCR_MODEL || 'gpt-5.6-sol',
+  ocrModel: process.env.AI_OCR_MODEL || process.env.TOAPIS_OCR_MODEL || 'gpt-4o',
   imageModel: process.env.AI_IMAGE_MODEL || process.env.TOAPIS_IMAGE_MODEL || 'gpt-image-2',
   fallbackModels: [
     ...(process.env.AI_FALLBACK_MODELS || 'gpt-5.5,gpt-4o')
