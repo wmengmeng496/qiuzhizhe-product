@@ -321,8 +321,10 @@ export async function callAiJson({ model, messages, temperature = 0.5, maxTokens
   for (const activeModel of modelsToTry) {
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) break;
+    // Cap individual model call to at most 60s so fallbacks can execute if one hangs
+    const perModelTimeout = Math.min(60000, remainingMs);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), remainingMs);
+    const timer = setTimeout(() => controller.abort(), perModelTimeout);
 
     try {
       const isGemini = String(activeModel).toLowerCase().includes('gemini');
@@ -372,11 +374,12 @@ export async function callAiJson({ model, messages, temperature = 0.5, maxTokens
       }, protectedPayload.replacements);
     } catch (error) {
       if (error?.name === 'AbortError') {
-        errors.push('请求超时');
-        break;
+        errors.push(`${activeModel} 超时`);
+        continue;
       }
       if (!(error instanceof ApiError)) {
-        throw new ApiError(503, 'AI 服务暂时无法连接，请稍后再试');
+        errors.push(`${activeModel} 连接异常`);
+        continue;
       }
       throw error;
     } finally {
@@ -486,7 +489,7 @@ export async function optimizeResumeWithAi(input) {
     { role: 'user', content: prompts.user({ input: { ...input, resumeContent }, modeInstruction }) },
   ];
   let result = await callAiJson({
-    model: input.model,
+    model: input.model || aiProvider.defaultModel,
     temperature: aiDefaults.resumeOptimize.temperature,
     maxTokens: aiDefaults.resumeOptimize.maxTokens,
     messages,

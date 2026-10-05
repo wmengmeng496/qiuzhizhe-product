@@ -14,16 +14,16 @@ export const aiProvider = {
   apiKey: process.env.TOAPIS_API_KEY || process.env.CUSTOM_PROXY_KEY || '',
   timeoutMs: boundedTimeout(process.env.AI_TIMEOUT_MS, 150000, 240000),
   imageTimeoutMs: boundedTimeout(process.env.AI_IMAGE_TIMEOUT_MS, 180000, 300000),
-  defaultModel: process.env.AI_DEFAULT_MODEL || process.env.TOAPIS_DEFAULT_MODEL || 'gpt-5.6-sol',
+  defaultModel: process.env.AI_DEFAULT_MODEL || process.env.TOAPIS_DEFAULT_MODEL || 'gemini-3.6-flash',
   ocrModel: process.env.AI_OCR_MODEL || process.env.TOAPIS_OCR_MODEL || 'gemini-3.6-flash',
   imageModel: process.env.AI_IMAGE_MODEL || process.env.TOAPIS_IMAGE_MODEL || 'gpt-image-2',
   fallbackModels: [
-    ...(process.env.AI_FALLBACK_MODELS || 'gpt-5.6-sol,gemini-3.6-flash')
+    ...(process.env.AI_FALLBACK_MODELS || 'gemini-3.6-flash,gpt-5.6-sol')
       .split(',')
       .map((item) => item.trim())
       .filter(Boolean),
-    'gpt-5.6-sol',
     'gemini-3.6-flash',
+    'gpt-5.6-sol',
   ],
   responseFormat: { type: 'json_object' },
 };
