@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { createResumeOptimization } from '@/lib/backend-service';
 import { fetchJobDescription, getStoredUser } from '@/lib/api';
 import { extractPdfText } from '@/lib/pdf-reader';
+import { extractPdfPageImages } from '@/lib/pdf-image-reader';
 import { extractDocxText } from '@/lib/docx-reader';
 import type { OptimizeMode } from '../resume-optimizer/page';
 
@@ -2123,6 +2124,7 @@ export default function HomePage() {
   const [optimizationFlow, setOptimizationFlow] = useState<OptimizationFlow>('resume');
   const [optimizationStageIndex, setOptimizationStageIndex] = useState(0);
   const [uploadingResume, setUploadingResume] = useState(false);
+  const [resumePageImages, setResumePageImages] = useState<string[]>([]);
   const [toast, setToast] = useState('');
   const [aiConsent, setAiConsent] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -2294,6 +2296,7 @@ export default function HomePage() {
     setActiveModuleKey(session.activeMode);
     setSelectedModel(session.model ?? DEFAULT_WORKSPACE_MODEL);
     setUploadedFile(null);
+    setResumePageImages([]);
     setJobRequirements(session.jobRequirements);
     setDraftJobRequirements(session.jobRequirements);
     setDrawerOpen(false);
@@ -2318,7 +2321,20 @@ export default function HomePage() {
     try {
       const rawContent = (await extractResumeText(file)).trim();
       const { content, usedFallback } = prepareUploadedResumeContent(rawContent, file.name);
-      if (content.length < 20) {
+      
+      let pageImages: string[] = [];
+      const ext = getFileExtension(file.name);
+      if ((ext === '.pdf' || file.type.includes('pdf')) && usedFallback) {
+        setStatusText('正在解析 PDF 页面图像...');
+        try {
+          pageImages = await extractPdfPageImages(file, 3);
+        } catch {
+          // ignore page image errors
+        }
+      }
+      setResumePageImages(pageImages);
+
+      if (content.length < 20 && pageImages.length === 0) {
         showToast('简历内容太短，请检查文件');
         return;
       }
@@ -2334,10 +2350,12 @@ export default function HomePage() {
       addMessage({
         role: 'assistant',
         content: usedFallback
-          ? `已读取简历《${file.name}》，但 PDF 文本层不可读，已先清理乱码并保留文件名信息。建议上传 DOCX / TXT 或粘贴简历文本。`
+          ? (pageImages.length > 0
+              ? `已读取简历《${file.name}》，检测到文本层包含特殊编码，已提取页面图像供 AI 视觉完整识别。`
+              : `已读取简历《${file.name}》，但 PDF 文本层不可读，已先保留文件名信息。建议上传 DOCX / TXT 或粘贴简历文本。`)
           : `已读取简历《${file.name}》，你可以继续输入目标岗位、JD 或优化要求。`,
       });
-      showToast(usedFallback ? 'PDF 文本层不可读，已清理乱码' : '简历已上传并读取');
+      showToast(usedFallback && pageImages.length > 0 ? '已加载简历图像供 AI 识别' : usedFallback ? 'PDF 文本层不可读，已清理乱码' : '简历已上传并读取');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '文件读取失败，请重试');
     } finally {
@@ -2419,6 +2437,7 @@ ${trimmedInstruction}`,
         optimizeMode: nextMode,
         model: selectedModel,
         keywordMatch: true,
+        resumePageImages: resumePageImages.length > 0 ? resumePageImages : undefined,
         aiConsent: true,
       });
       const nextResult = {
