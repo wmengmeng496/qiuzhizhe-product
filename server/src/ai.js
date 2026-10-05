@@ -1,5 +1,6 @@
 import { config } from './config.js';
 import { ApiError } from './errors.js';
+import { redactAiMessages, restoreAiResult } from './pii.js';
 import { aiDefaults, aiModelMap, aiPrompts, aiProvider, resumeOptimizeModes } from '../config/ai.config.js';
 
 function extractJson(content) {
@@ -46,12 +47,8 @@ function contentSimilarity(left = '', right = '') {
 
 function shouldTryNextModel(status, detail) {
   return (
-    status === 404 ||
-    status === 502 ||
-    status === 504 ||
-    status === 524 ||
-    status === 503 ||
-    /ChannelCapability|未配置渠道|SKU 路由|model.*not.*found|模型.*不存在|模型.*未配置/i.test(detail)
+    ((status === 400 || status === 404) && /model|模型|channel|渠道|sku/i.test(detail)) ||
+    /ChannelCapability|未配置渠道|SKU 路由|model[_ -]?not[_ -]?found|模型.*(?:不存在|未配置)/i.test(detail)
   );
 }
 
@@ -93,7 +90,7 @@ function parseAiErrorDetail(text) {
   try {
     const parsed = JSON.parse(text);
     return {
-      message: parsed?.error?.message || parsed?.message || text.slice(0, 300),
+      message: parsed?.error?.message || parsed?.message || '上游 AI 服务返回错误',
       code: parsed?.error?.code || parsed?.code || '',
     };
   } catch {
@@ -102,9 +99,9 @@ function parseAiErrorDetail(text) {
       return { message: '上游 ToApis 网关超时，请稍后重试或切换模型', code: 'UPSTREAM_TIMEOUT' };
     }
     if (/<html[\s>]/i.test(String(text))) {
-      return { message: title || '上游 AI 服务返回了网页错误', code: 'UPSTREAM_HTML_ERROR' };
+      return { message: '上游 AI 服务返回了网页错误', code: 'UPSTREAM_HTML_ERROR' };
     }
-    return { message: text.slice(0, 300), code: '' };
+    return { message: '上游 AI 服务返回错误', code: '' };
   }
 }
 
@@ -230,11 +227,15 @@ export async function callAiJson({ model, messages, temperature = 0.5, maxTokens
     aiProvider.defaultModel,
     ...(aiProvider.fallbackModels || []),
   ]);
+  const protectedPayload = redactAiMessages(messages);
   const errors = [];
+  const deadline = Date.now() + config.ai.timeoutMs;
 
   for (const activeModel of modelsToTry) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) break;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), Math.min(config.ai.timeoutMs, 45000));
+    const timer = setTimeout(() => controller.abort(), remainingMs);
 
     try {
       const response = await fetch(config.ai.url, {
@@ -246,7 +247,7 @@ export async function callAiJson({ model, messages, temperature = 0.5, maxTokens
         },
         body: JSON.stringify({
           model: activeModel,
-          messages,
+          messages: protectedPayload.messages,
           temperature,
           max_tokens: maxTokens,
           response_format: aiProvider.responseFormat,
@@ -256,38 +257,37 @@ export async function callAiJson({ model, messages, temperature = 0.5, maxTokens
 
       const text = await response.text();
       if (!response.ok) {
-        const detail = parseAiErrorDetail(text).message;
-        errors.push(`${activeModel}: ${detail}`);
-        if (shouldTryNextModel(response.status, detail)) continue;
-        throw new ApiError(502, `上游 AI 服务错误：${detail}`);
+        const detail = parseAiErrorDetail(text);
+        errors.push('模型不可用');
+        if (shouldTryNextModel(response.status, `${detail.code} ${detail.message}`)) continue;
+        throw new ApiError(502, '上游 AI 服务暂时不可用，请稍后再试');
       }
 
       let data;
       try {
         data = JSON.parse(text);
       } catch {
-        errors.push(`${activeModel}: 上游 AI 服务返回了无效 JSON`);
+        errors.push('上游 AI 服务返回了无效 JSON');
         continue;
       }
 
       const content = data?.choices?.[0]?.message?.content;
       if (!content) {
-        errors.push(`${activeModel}: AI 返回内容为空`);
+        errors.push('AI 返回内容为空');
         continue;
       }
 
-      return {
+      return restoreAiResult({
         ...extractJson(content),
         model: data?.model || activeModel,
-      };
+      }, protectedPayload.replacements);
     } catch (error) {
       if (error?.name === 'AbortError') {
-        errors.push(`${activeModel}: 请求超时`);
-        continue;
+        errors.push('请求超时');
+        break;
       }
       if (!(error instanceof ApiError)) {
-        errors.push(`${activeModel}: AI 网关连接失败`);
-        break;
+        throw new ApiError(503, 'AI 服务暂时无法连接，请稍后再试');
       }
       throw error;
     } finally {

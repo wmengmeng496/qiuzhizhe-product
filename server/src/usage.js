@@ -11,7 +11,7 @@ export async function getUsage(client, userId) {
     `insert into usage_quotas (user_id, period)
      values ($1, $2)
      on conflict (user_id, period) do update set period = excluded.period
-     returning user_id, period, resume_optimize_used, interview_review_used`,
+     returning user_id, period, resume_optimize_used, interview_review_used, career_photo_used`,
     [userId, period],
   );
   return result.rows[0];
@@ -19,8 +19,12 @@ export async function getUsage(client, userId) {
 
 export async function assertAndConsumeUsage(client, user, kind) {
   const limits = planLimits[user.plan] || planLimits.free;
-  const column = kind === 'resume' ? 'resume_optimize_used' : 'interview_review_used';
-  const limit = kind === 'resume' ? limits.resumeOptimize : limits.interviewReview;
+  const columns = {
+    resume: ['resume_optimize_used', limits.resumeOptimize],
+    interview: ['interview_review_used', limits.interviewReview],
+    careerPhoto: ['career_photo_used', limits.careerPhoto],
+  };
+  const [column, limit] = columns[kind] || columns.resume;
   const period = currentPeriod();
   await getUsage(client, user.id);
   const result = await client.query(
@@ -37,7 +41,11 @@ export async function assertAndConsumeUsage(client, user, kind) {
 }
 
 export async function refundUsage(client, user, kind, period = currentPeriod()) {
-  const column = kind === 'resume' ? 'resume_optimize_used' : 'interview_review_used';
+  const column = {
+    resume: 'resume_optimize_used',
+    interview: 'interview_review_used',
+    careerPhoto: 'career_photo_used',
+  }[kind] || 'resume_optimize_used';
   await client.query(
     `update usage_quotas set ${column} = greatest(${column} - 1, 0), updated_at = now()
      where user_id = $1 and period = $2`,

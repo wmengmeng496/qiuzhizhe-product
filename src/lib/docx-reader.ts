@@ -1,5 +1,5 @@
 function clean_text(s: string) {
-  return s.replace(/\u0000/g, '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  return s.split(String.fromCharCode(0)).join('').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 async function readBuf(file: File) {

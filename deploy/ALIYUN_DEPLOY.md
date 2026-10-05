@@ -20,6 +20,8 @@ AI_FALLBACK_MODELS=gpt-5.5,gpt-4o
 
 不要提交 `server/.env`。
 
+本地开发可使用仓库根目录的 `docker-compose.yml` 启动自带 PostgreSQL。生产部署不自动创建数据库，必须通过 `DATABASE_URL` 显式连接已备份、受监控的生产 PostgreSQL。发布脚本使用 `/api/ready` 验证数据库连接和 AI 密钥配置，`/api/health` 仅表示 API 进程存活。实时网关连通性可在后端容器运行 `npm run doctor` 检查。
+
 ## 构建发布
 
 从仓库根目录执行一键发布脚本：
@@ -29,8 +31,7 @@ AI_FALLBACK_MODELS=gpt-5.5,gpt-4o
 ```
 
 Web 镜像同时包含 Nginx 配置，并将 `/api/` 转发到后端容器。后端启动时会自动应用
-`database/schema.sql`。脚本会使用当前 Git commit 作为发布编号，并等待健康接口确认默认模型
-已经切换为 `gpt-5.6-sol`；验证不通过时会打印后端日志并返回失败。
+`database/schema.sql`。脚本会使用当前 Git commit 作为发布编号，并等待就绪接口确认数据库可连接且 AI 密钥已配置；验证不通过时会打印后端日志并返回失败。
 
 生产 Compose 仅将 Web 容器发布到服务器本机的 `127.0.0.1:8080`，避免与宝塔 Nginx
 占用的 80/443 端口冲突。在宝塔站点中将域名反向代理到 `http://127.0.0.1:8080`，
@@ -39,24 +40,20 @@ Web 镜像同时包含 Nginx 配置，并将 `/api/` 转发到后端容器。后
 ## 发布验收
 
 ```bash
-curl -fsS https://www.qiuzhijianli.xyz/api/health
+curl -fsS https://www.qiuzhijianli.xyz/api/ready
 ```
 
-返回结果中必须满足：
+返回结果中必须满足（数据库可连接，AI 密钥已配置；不代表上游网关可达）：
 
 ```json
 {
-  "status": "ok",
-  "release": "本次发布编号",
-  "ai": {
-    "configured": true,
-    "defaultModel": "gpt-5.6-sol",
-    "ocrModel": "gpt-5.6-sol"
-  }
+  "status": "ready",
+  "database": { "ready": true },
+  "ai": { "configured": true }
 }
 ```
 
-如果模型仍是旧值，说明后端容器没有使用本次镜像或 `server/.env` 仍保留旧配置。
+模型和发布编号可另外通过 `/api/health` 查看。`/api/ready` 不调用 AI 供应商，不能用它证明真实模型请求已通过。
 
 查看后端日志：
 

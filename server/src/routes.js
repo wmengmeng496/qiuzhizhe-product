@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import {
   getWechatConfig,
@@ -9,7 +10,7 @@ import {
   requireAuth,
   startWechatLogin,
 } from './auth.js';
-import { query, withTransaction } from './db.js';
+import { checkDatabase, query, withTransaction } from './db.js';
 import { asyncHandler, ApiError } from './errors.js';
 import { analyzeInterviewQuestion, generateCareerPhotoWithAi, optimizeResumeWithAi, summarizeInterviewReview } from './ai.js';
 import { assertAndConsumeUsage, assertModelAllowed, getUsage, refundUsage } from './usage.js';
@@ -17,25 +18,40 @@ import { config, planLimits } from './config.js';
 import { recordEvent } from './events.js';
 import { sendCode } from './sms.js';
 import { aiProvider } from '../config/ai.config.js';
+import { rateLimit } from './rate-limit.js';
+import { assertPublicAllowedUrl, fetchWithTimeout, readResponseText } from './url-safety.js';
 import {
+  consumeDevCareerPhotoUsage,
+  consumeDevInterviewUsage,
   consumeDevResumeUsage,
+  deleteDevUserData,
   getDevUsage,
   listDevResumeOptimizations,
+  refundDevCareerPhotoUsage,
+  refundDevInterviewUsage,
   refundDevResumeUsage,
   saveDevResumeOptimization,
 } from './dev-store.js';
 
 const router = Router();
 
-const optimizeSchema = z.object({
-  resumeContent: z.string().min(20).max(80000),
+export const optimizeSchema = z.object({
+  resumeContent: z.string().max(80000),
   jobRequirements: z.string().min(20).max(80000),
   optimizeMode: z.enum(['full', 'project', 'intro', 'experience', 'skills']).default('full'),
   model: z.string().default('gpt-5.6-sol'),
   keywordMatch: z.boolean().default(true),
   jobTitle: z.string().trim().max(120).optional().default(''),
   company: z.string().trim().max(120).optional().default(''),
-  resumePageImages: z.array(z.string().max(3_000_000)).max(3).optional().default([]),
+  resumePageImages: z.array(z.string().regex(/^data:image\/(?:jpeg|jpg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/, '简历图片必须是有效的图片数据').max(3_000_000)).max(3).optional().default([]),
+  aiConsent: z.literal(true),
+}).superRefine((input, context) => {
+  if (input.resumeContent.trim().length < 20 && input.resumePageImages.length === 0) {
+    context.addIssue({ code: z.ZodIssueCode.too_small, minimum: 20, inclusive: true, type: 'string', path: ['resumeContent'], message: '简历文本至少需要 20 个字符，或提供 1-3 张简历图片用于 OCR' });
+  }
+  if (input.resumeContent.trim().length < 20 && input.resumePageImages.length < 1) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['resumePageImages'], message: '图片简历必须提供 1-3 张图片' });
+  }
 });
 
 const interviewSchema = z.object({
@@ -110,7 +126,18 @@ router.get('/health', (req, res) => {
   });
 });
 
-router.post('/auth/sms/send', asyncHandler(sendCode));
+router.get('/ready', asyncHandler(async (req, res) => {
+  const database = await checkDatabase();
+  const ready = database.ready && Boolean(config.ai.key);
+  res.status(ready ? 200 : 503).json({
+    success: ready,
+    status: ready ? 'ready' : 'not_ready',
+    database,
+    ai: { configured: Boolean(config.ai.key) },
+  });
+}));
+
+router.post('/auth/sms/send', rateLimit({ windowMs: 60_000, max: 5, message: '短信请求过于频繁，请稍后再试' }), asyncHandler(sendCode));
 
 function decodeHtmlEntities(value = '') {
   return value
@@ -222,7 +249,8 @@ async function fetchBossMicroJob(targetUrl) {
   params.set('aid', targetUrl.searchParams.get('aid') || '');
   params.set('fromSource', targetUrl.searchParams.get('fromSource') || '-1');
   const apiUrl = `https://m.zhipin.com/wapi/zpjob/wjd/job/${encodeURIComponent(sjid)}?${params.toString()}`;
-  const response = await fetch(apiUrl, {
+  await assertPublicAllowedUrl(new URL(apiUrl), ['zhipin.com']);
+  const response = await fetchWithTimeout(apiUrl, {
     headers: {
       'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
       accept: 'application/json, text/plain, */*',
@@ -241,14 +269,14 @@ async function fetchBossMicroJob(targetUrl) {
 
   const contentType = response.headers.get('content-type') || '';
   if (!contentType.includes('json')) {
-    const text = await response.text();
+    const text = await readResponseText(response, 1_000_000);
     if (/security|请稍候|安全验证|captcha|verify/i.test(text)) {
       throw new ApiError(409, 'BOSS 触发了安全验证，后端无法直接读取这个链接。请复制 JD 原文后使用「粘贴 JD」。');
     }
     return null;
   }
 
-  const data = await response.json();
+  const data = JSON.parse(await readResponseText(response, 1_000_000));
   if (data?.rescode && data.rescode !== 1) {
     throw new ApiError(422, data.message || data.errmsg || 'BOSS 没有返回可用的岗位 JD。');
   }
@@ -302,15 +330,16 @@ function parseBossJobHtml(html, url) {
   };
 }
 
-router.post('/auth/register', asyncHandler(register));
-router.post('/auth/login', asyncHandler(login));
+router.post('/auth/register', rateLimit({ windowMs: 60_000, max: 10 }), asyncHandler(register));
+router.post('/auth/login', rateLimit({ windowMs: 60_000, max: 20 }), asyncHandler(login));
 router.get('/auth/wechat/config', asyncHandler(getWechatConfig));
 router.get('/auth/wechat/start', asyncHandler(startWechatLogin));
 router.get('/auth/wechat/callback', asyncHandler(handleWechatCallback));
 
-router.post('/job-description/fetch', asyncHandler(async (req, res) => {
+router.post('/job-description/fetch', rateLimit({ windowMs: 60_000, max: 20 }), asyncHandler(async (req, res) => {
   const input = jobDescriptionSchema.parse(req.body);
   const targetUrl = new URL(input.url);
+  await assertPublicAllowedUrl(targetUrl, ['zhipin.com', 'kanzhun.com', 'bosszhipin.com']);
   if (!/(^|\.)zhipin\.com$|(^|\.)kanzhun\.com$|(^|\.)bosszhipin\.com$/i.test(targetUrl.hostname)) {
     throw new ApiError(400, '请粘贴 BOSS 直聘岗位链接');
   }
@@ -321,20 +350,27 @@ router.post('/job-description/fetch', asyncHandler(async (req, res) => {
     return;
   }
 
-  const response = await fetch(targetUrl.toString(), {
+  const response = await fetchWithTimeout(targetUrl.toString(), {
     headers: {
       'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
       accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'accept-language': 'zh-CN,zh;q=0.9,en;q=0.7',
     },
-    redirect: 'follow',
+    redirect: 'manual',
   });
 
+  if (response.status >= 300 && response.status < 400) {
+    const location = response.headers.get('location');
+    if (!location) throw new ApiError(502, 'BOSS 页面重定向地址无效');
+    const redirectUrl = new URL(location, targetUrl);
+    await assertPublicAllowedUrl(redirectUrl, ['zhipin.com', 'kanzhun.com', 'bosszhipin.com']);
+    throw new ApiError(409, 'BOSS 页面发生跨页面重定向，请复制 JD 原文后使用「粘贴 JD」。');
+  }
   if (!response.ok) {
     throw new ApiError(502, `BOSS 页面读取失败：HTTP ${response.status}`);
   }
 
-  const html = await response.text();
+  const html = await readResponseText(response, 2_000_000);
   const job = parseBossJobHtml(html, targetUrl.toString());
   res.json({ success: true, job });
 }));
@@ -359,7 +395,61 @@ router.get('/me', requireAuth, asyncHandler(async (req, res) => {
   });
 }));
 
-router.post('/resume-optimizations', requireAuth, asyncHandler(async (req, res) => {
+// Export application data without credentials or third-party raw profiles.
+router.get('/me/export', requireAuth, asyncHandler(async (req, res) => {
+  if (req.devMemoryAuth) {
+    res.json({ success: true, exportedAt: new Date().toISOString(), user: req.user, usage: getDevUsage(req.user.id), resumeOptimizations: listDevResumeOptimizations(req.user.id), orders: [], interviewReviews: [] });
+    return;
+  }
+  const [optimizations, orders, reviews] = await Promise.all([
+    query('select id, job_title, company, job_requirements, resume_content, optimize_mode, model, optimized_content, highlighted_content, keywords, improvements, match_score, status, created_at from resume_optimizations where user_id = $1 order by created_at desc', [req.user.id]),
+    query('select id, plan, billing_cycle, amount, currency, provider, status, contact, remark, admin_note, approved_at, created_at, updated_at from orders where user_id = $1 order by created_at desc', [req.user.id]),
+    query('select r.id, r.company, r.position, r.industry, r.interview_date, r.model, r.overall_rating, r.summary, r.improvements, r.status, r.created_at, q.id as question_id, q.question, q.answer, q.score, q.analysis, q.suggestion from interview_reviews r left join interview_review_questions q on q.review_id = r.id where r.user_id = $1 order by r.created_at desc, q.created_at asc', [req.user.id]),
+  ]);
+  res.json({ success: true, exportedAt: new Date().toISOString(), user: req.user, resumeOptimizations: optimizations.rows, orders: orders.rows, interviewReviews: reviews.rows });
+}));
+
+router.delete('/me/data', requireAuth, asyncHandler(async (req, res) => {
+  if (req.devMemoryAuth) {
+    deleteDevUserData(req.user.id, { preserveUsage: true });
+    res.json({ success: true });
+    return;
+  }
+  await withTransaction(async (client) => {
+    await client.query('delete from resume_optimizations where user_id = $1', [req.user.id]);
+    await client.query('delete from interview_reviews where user_id = $1', [req.user.id]);
+  });
+  res.json({ success: true });
+}));
+
+router.delete('/me', requireAuth, asyncHandler(async (req, res) => {
+  const input = z.object({
+    confirmation: z.literal('DELETE'),
+    password: z.string().max(128).optional(),
+  }).parse(req.body);
+  if (req.devMemoryAuth) {
+    const { verifyMemoryUserPassword, forgetMemoryUser } = await import('./auth.js');
+    if (!(await verifyMemoryUserPassword(req.user.id, input.password))) {
+      throw new ApiError(403, '密码不正确');
+    }
+    forgetMemoryUser(req.user.id);
+    deleteDevUserData(req.user.id);
+    res.json({ success: true });
+    return;
+  }
+  const deleted = await withTransaction(async (client) => {
+    const found = await client.query('select password_hash from users where id = $1 for update', [req.user.id]);
+    if (!found.rowCount) throw new ApiError(404, '用户不存在');
+    if (found.rows[0].password_hash && !(await bcrypt.compare(input.password || '', found.rows[0].password_hash))) {
+      throw new ApiError(403, '密码不正确');
+    }
+    return client.query('delete from users where id = $1 returning id', [req.user.id]);
+  });
+  if (!deleted.rowCount) throw new ApiError(404, '用户不存在');
+  res.json({ success: true });
+}));
+
+router.post('/resume-optimizations', rateLimit({ windowMs: 60_000, max: 10, message: 'AI 简历优化请求过于频繁，请稍后再试' }), requireAuth, asyncHandler(async (req, res) => {
   const input = optimizeSchema.parse(req.body);
   assertModelAllowed(req.user, input.model);
 
@@ -454,9 +544,19 @@ router.post('/resume-optimizations', requireAuth, asyncHandler(async (req, res) 
   }
 }));
 
-router.post('/career-assets/photo', requireAuth, asyncHandler(async (req, res) => {
+router.post('/career-assets/photo', rateLimit({ windowMs: 60_000, max: 3, message: '形象照生成请求过于频繁，请稍后再试' }), requireAuth, asyncHandler(async (req, res) => {
   const input = careerPhotoSchema.parse(req.body);
-  const result = await generateCareerPhotoWithAi(input);
+  const reservation = req.devMemoryAuth
+    ? consumeDevCareerPhotoUsage(req.user)
+    : await withTransaction((client) => assertAndConsumeUsage(client, req.user, 'careerPhoto'));
+  let result;
+  try {
+    result = await generateCareerPhotoWithAi(input);
+  } catch (error) {
+    if (req.devMemoryAuth) refundDevCareerPhotoUsage(req.user.id, reservation.period);
+    else await withTransaction((client) => refundUsage(client, req.user, 'careerPhoto', reservation.period));
+    throw error;
+  }
 
   await recordEvent(req, {
     userId: req.user.id,
@@ -466,7 +566,7 @@ router.post('/career-assets/photo', requireAuth, asyncHandler(async (req, res) =
     metadata: { gender: input.gender, style: input.style, model: result.model },
   });
 
-  res.status(201).json({ success: true, result });
+  res.status(201).json({ success: true, result, usage: reservation });
 }));
 
 router.post('/orders/manual', requireAuth, asyncHandler(async (req, res) => {
@@ -518,12 +618,17 @@ router.get('/resume-optimizations', requireAuth, asyncHandler(async (req, res) =
   res.json({ success: true, items: result.rows });
 }));
 
-router.post('/interview-reviews', requireAuth, asyncHandler(async (req, res) => {
+router.post('/interview-reviews', rateLimit({ windowMs: 60_000, max: 6, message: '面试复盘请求过于频繁，请稍后再试' }), requireAuth, asyncHandler(async (req, res) => {
   const input = interviewSchema.parse(req.body);
   assertModelAllowed(req.user, input.model);
 
-  const analyzed = [];
-  for (const item of input.questions) {
+  const reservation = req.devMemoryAuth
+    ? consumeDevInterviewUsage(req.user)
+    : await withTransaction((client) => assertAndConsumeUsage(client, req.user, 'interview'));
+
+  try {
+    const analyzed = [];
+    for (const item of input.questions) {
     const analysis = await analyzeInterviewQuestion({
       model: input.model,
       position: input.position,
@@ -544,10 +649,9 @@ router.post('/interview-reviews', requireAuth, asyncHandler(async (req, res) => 
     position: input.position,
     questions: analyzed,
   });
-  const overallRating = Math.round(analyzed.reduce((sum, q) => sum + q.score, 0) / analyzed.length);
+    const overallRating = Math.round(analyzed.reduce((sum, q) => sum + q.score, 0) / analyzed.length);
 
-  const saved = await withTransaction(async (client) => {
-    await assertAndConsumeUsage(client, req.user, 'interview');
+    const saved = await withTransaction(async (client) => {
     const review = await client.query(
       `insert into interview_reviews
        (user_id, company, position, industry, interview_date, model, overall_rating, summary, improvements, status)
@@ -578,9 +682,9 @@ router.post('/interview-reviews', requireAuth, asyncHandler(async (req, res) => 
     return review.rows[0];
   });
 
-  res.status(201).json({
-    success: true,
-    review: {
+    res.status(201).json({
+      success: true,
+      review: {
       id: saved.id,
       company: input.company,
       position: input.position,
@@ -592,9 +696,16 @@ router.post('/interview-reviews', requireAuth, asyncHandler(async (req, res) => 
       summary: String(overall.summary || ''),
       improvements: Array.isArray(overall.improvements) ? overall.improvements.map(String) : [],
       questions: analyzed.map((q, index) => ({ id: `${saved.id}-${index}`, ...q })),
-      createdAt: saved.created_at,
-    },
-  });
+        createdAt: saved.created_at,
+      },
+    });
+  } catch (error) {
+    if (reservation) {
+      if (req.devMemoryAuth) refundDevInterviewUsage(req.user.id, reservation.period);
+      else await withTransaction((client) => refundUsage(client, req.user, 'interview', reservation.period));
+    }
+    throw error;
+  }
 }));
 
 router.get('/interview-reviews', requireAuth, asyncHandler(async (req, res) => {

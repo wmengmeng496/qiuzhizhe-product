@@ -1,7 +1,10 @@
-import dotenv from 'dotenv';
+import '../src/env.js';
 
-dotenv.config();
-dotenv.config({ path: '../.env', override: false });
+function boundedTimeout(value, fallback, maximum) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(Math.max(Math.round(parsed), 1000), maximum);
+}
 
 export const aiProvider = {
   baseURL: process.env.TOAPIS_BASE_URL || 'https://toapis.com/v1',
@@ -9,8 +12,8 @@ export const aiProvider = {
   imageEditsPath: process.env.AI_IMAGE_EDITS_PATH || '/images/edits',
   imageGenerationsPath: process.env.AI_IMAGE_GENERATIONS_PATH || '/images/generations',
   apiKey: process.env.TOAPIS_API_KEY || process.env.CUSTOM_PROXY_KEY || '',
-  timeoutMs: Number(process.env.AI_TIMEOUT_MS || 60000),
-  imageTimeoutMs: Number(process.env.AI_IMAGE_TIMEOUT_MS || 180000),
+  timeoutMs: boundedTimeout(process.env.AI_TIMEOUT_MS, 45000, 45000),
+  imageTimeoutMs: boundedTimeout(process.env.AI_IMAGE_TIMEOUT_MS, 180000, 300000),
   defaultModel: process.env.AI_DEFAULT_MODEL || process.env.TOAPIS_DEFAULT_MODEL || 'gpt-5.6-sol',
   ocrModel: process.env.AI_OCR_MODEL || process.env.TOAPIS_OCR_MODEL || 'gpt-5.6-sol',
   imageModel: process.env.AI_IMAGE_MODEL || process.env.TOAPIS_IMAGE_MODEL || 'gpt-image-2',

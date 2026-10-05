@@ -1,8 +1,6 @@
-import dotenv from 'dotenv';
+import './env.js';
 import { aiProvider } from '../config/ai.config.js';
 
-dotenv.config();
-dotenv.config({ path: '../.env', override: false });
 
 function joinUrl(baseURL, path) {
   return `${baseURL.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
@@ -35,20 +33,42 @@ export const config = {
   },
 };
 
+export function validateProductionConfig() {
+  if (process.env.NODE_ENV !== 'production') return;
+
+  const required = [
+    ['JWT_SECRET', config.jwtSecret],
+    ['DATABASE_URL', process.env.DATABASE_URL],
+    ['CORS_ORIGIN', process.env.CORS_ORIGIN],
+  ];
+  const missing = required
+    .filter(([, value]) => !value || value === 'dev-only-change-me' || value === '*')
+    .map(([name]) => name);
+  if (missing.length > 0) {
+    throw new Error(`生产环境缺少安全配置：${missing.join(', ')}`);
+  }
+  if (config.jwtSecret.length < 32) {
+    throw new Error('生产环境 JWT_SECRET 至少需要 32 个字符');
+  }
+}
+
 export const planLimits = {
   free: {
     resumeOptimize: 3,
     interviewReview: 1,
+    careerPhoto: 1,
     allowedModels: ['gpt-5.6-sol', 'gpt-3.5', 'gpt-4o'],
   },
   pro: {
     resumeOptimize: 50,
     interviewReview: 10,
+    careerPhoto: 10,
     allowedModels: ['gpt-5.6-sol', 'gpt-3.5', 'gpt-4o', 'gpt-4'],
   },
   ultimate: {
     resumeOptimize: 300,
     interviewReview: 100,
+    careerPhoto: 50,
     allowedModels: ['gpt-5.6-sol', 'gpt-3.5', 'gpt-4o', 'gpt-4', 'claude-3', 'claude-3.5', 'gemini-pro'],
   },
 };

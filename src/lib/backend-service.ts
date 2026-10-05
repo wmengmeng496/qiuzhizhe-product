@@ -10,6 +10,7 @@ export interface ResumeOptimizationPayload {
   jobTitle?: string;
   company?: string;
   resumePageImages?: string[];
+  aiConsent: true;
 }
 
 export interface BackendOptimizationResult {

@@ -79,24 +79,6 @@ function findMemoryUserById(id) {
   return null;
 }
 
-function restoreMemoryUserFromToken(decoded) {
-  if (!decoded?.sub) return null;
-  const email = decoded.email || `${decoded.sub}@dev.local`;
-  const now = new Date().toISOString();
-  const user = {
-    id: decoded.sub,
-    email,
-    phone: '',
-    password_hash: '',
-    display_name: defaultDisplayName(email),
-    plan: decoded.plan || 'ultimate',
-    created_at: now,
-  };
-  memoryUsers.set(user.id, user);
-  memoryUsers.set(email.toLowerCase(), user);
-  return user;
-}
-
 function defaultDisplayName(account) {
   if (/^1[3-9]\d{9}$/.test(account)) return `用户${account.slice(-4)}`;
   const email = account || '';
@@ -160,9 +142,6 @@ function verifyToken(token) {
   try {
     return jwt.verify(token, config.jwtSecret);
   } catch (error) {
-    if (process.env.NODE_ENV !== 'production' && config.jwtSecret !== 'dev-only-change-me') {
-      return jwt.verify(token, 'dev-only-change-me');
-    }
     throw error;
   }
 }
@@ -182,8 +161,8 @@ export async function requireAuth(req, res, next) {
       if (result.rowCount === 0) throw new ApiError(401, '登录状态已失效');
       req.user = publicUser(result.rows[0]);
     } catch (error) {
-      if (!isDbUnavailable(error)) throw error;
-      const memoryUser = findMemoryUserById(decoded.sub) || restoreMemoryUserFromToken(decoded);
+      if (!isDbUnavailable(error) || process.env.NODE_ENV === 'production') throw error;
+      const memoryUser = findMemoryUserById(decoded.sub);
       if (!memoryUser) throw new ApiError(401, '登录状态已失效，请重新登录');
       req.user = publicUser(memoryUser);
       req.devMemoryAuth = true;
@@ -201,6 +180,12 @@ export function requireAdmin(req, res, next) {
     return;
   }
   next();
+}
+
+export function forgetMemoryUser(userId) {
+  for (const [key, user] of memoryUsers.entries()) {
+    if (user.id === userId) memoryUsers.delete(key);
+  }
 }
 
 export async function register(req, res) {
@@ -235,7 +220,7 @@ export async function register(req, res) {
     await recordEvent(req, { userId: user.id, eventType: 'auth.register', entityType: 'user', entityId: user.id });
     res.status(201).json({ success: true, user, token: signToken(user) });
   } catch (error) {
-    if (isDbUnavailable(error)) {
+    if (isDbUnavailable(error) && process.env.NODE_ENV !== 'production') {
       const row = await createMemoryUser(input);
       const user = publicUser(row);
       console.warn('[auth] database unavailable, using in-memory dev user');
@@ -262,8 +247,9 @@ export async function login(req, res) {
       [input.email || null, input.phone || null],
     );
   } catch (error) {
-    if (!isDbUnavailable(error)) throw error;
-    const row = await findOrCreateMemoryUser(input);
+    if (!isDbUnavailable(error) || process.env.NODE_ENV === 'production') throw error;
+    const row = memoryUsers.get(input.phone || input.email?.toLowerCase());
+    if (!row) throw new ApiError(401, '账号或密码不正确');
     const ok = await bcrypt.compare(input.password, row.password_hash);
     if (!ok) throw new ApiError(401, '账号或密码不正确');
     const user = publicUser(row);
@@ -386,4 +372,11 @@ export async function handleWechatCallback(req, res) {
 
   await recordEvent(req, { userId: user.id, eventType: 'auth.wechat.login', entityType: 'user', entityId: user.id });
   res.type('html').send(tokenCallbackHtml({ token: signToken(user), user, redirect }));
+}
+
+export async function verifyMemoryUserPassword(id, password) {
+  const user = findMemoryUserById(id);
+  if (!user) return false;
+  if (!user.password_hash) return true;
+  return bcrypt.compare(password || '', user.password_hash);
 }

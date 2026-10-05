@@ -6,6 +6,8 @@ import { ApiError } from './errors.js';
 
 const codes = new Map();
 const lastSent = new Map();
+const failedAttempts = new Map();
+const MAX_VERIFY_ATTEMPTS = 5;
 
 function client() {
   if (!config.sms.accessKeyId || !config.sms.accessKeySecret) {
@@ -33,13 +35,27 @@ export async function sendCode(req, res) {
   const result = await client().sendSms(request);
   if (result.body?.code && result.body.code !== 'OK') throw new ApiError(502, result.body.message || '短信发送失败');
   codes.set(phone, { code, expiresAt: now + 5 * 60_000 });
+  failedAttempts.delete(phone);
   lastSent.set(phone, now);
   res.json({ success: true, message: '验证码已发送' });
 }
 
 export function verifyCode(phone, code) {
   const item = codes.get(phone);
-  if (!item || item.expiresAt < Date.now() || item.code !== code) return false;
+  if (!item || item.expiresAt < Date.now()) {
+    codes.delete(phone);
+    failedAttempts.delete(phone);
+    return false;
+  }
+  if (item.code !== code) {
+    const attempts = (failedAttempts.get(phone) || 0) + 1;
+    if (attempts >= MAX_VERIFY_ATTEMPTS) {
+      codes.delete(phone);
+      failedAttempts.delete(phone);
+    } else failedAttempts.set(phone, attempts);
+    return false;
+  }
   codes.delete(phone);
+  failedAttempts.delete(phone);
   return true;
 }

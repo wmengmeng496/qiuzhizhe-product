@@ -7,7 +7,7 @@ function is_item(v: unknown): v is PdfItem {
 }
 
 function cleanText(s: string) {
-  return s.replace(/\u0000/g, '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  return s.split(String.fromCharCode(0)).join('').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 async function read_buf(file: File) {
@@ -33,7 +33,8 @@ export async function extractPdfText(file: File) {
       })).sort((a, b) => Math.abs(b.y - a.y) > 2 ? b.y - a.y : a.x - b.x)
         .reduce<Array<{ y: number; parts: Array<{ x: number; text: string }> }>>((out, v) => {
           const row = out.find((r) => Math.abs(r.y - v.y) <= 2);
-          row ? row.parts.push({ x: v.x, text: v.text }) : out.push({ y: v.y, parts: [{ x: v.x, text: v.text }] });
+          if (row) row.parts.push({ x: v.x, text: v.text });
+          else out.push({ y: v.y, parts: [{ x: v.x, text: v.text }] });
           return out;
         }, []);
       pages.push(rows.map((r) => r.parts.sort((a, b) => a.x - b.x).map((p) => p.text).join(' ')).join('\n'));

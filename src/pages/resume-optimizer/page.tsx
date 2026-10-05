@@ -61,6 +61,9 @@ const MODEL_OPTIONS: Array<{ id: ModelId; name: string; desc: string; locked?: b
 ];
 
 const RESUME_DRAFT_KEY = 'resume_optimizer_draft_v2';
+const MAX_FILE_SIZE = 20 * 1024 * 1024;
+const MAX_PDF_PAGES = 10;
+const MAX_SCANNED_PDF_PAGES = 3;
 
 interface ResumeDraft {
   model: ModelId;
@@ -353,6 +356,8 @@ export default function ResumeOptimizerPage() {
   const [error, setError] = useState('');
   const [status, setStatus] = useState('上传简历并填写 JD 后即可开始优化');
   const [previewTab, setPreviewTab] = useState<'optimized' | 'original' | 'diff'>('optimized');
+  const [aiConsent, setAiConsent] = useState(false);
+  const [resultReviewed, setResultReviewed] = useState(false);
   const draftReadyRef = useRef(false);
 
   useEffect(() => {
@@ -401,8 +406,11 @@ export default function ResumeOptimizerPage() {
   }, []);
 
   useEffect(() => {
+    // Never share a resume draft between accounts. Anonymous drafts are intentionally not persisted.
+    const draftKey = user?.id ? `${RESUME_DRAFT_KEY}:${user.id}` : '';
+    if (!draftKey) { draftReadyRef.current = true; return; }
     try {
-      const raw = localStorage.getItem(RESUME_DRAFT_KEY);
+      const raw = localStorage.getItem(draftKey);
       if (!raw) {
         draftReadyRef.current = true;
         return;
@@ -423,14 +431,14 @@ export default function ResumeOptimizerPage() {
         setResultContent(draft.resultContent || draft.result.optimizedContent || '');
       }
     } catch {
-      localStorage.removeItem(RESUME_DRAFT_KEY);
+      localStorage.removeItem(draftKey);
     } finally {
       draftReadyRef.current = true;
     }
-  }, []);
+  }, [user?.id]);
 
   useEffect(() => {
-    if (!draftReadyRef.current) return;
+    if (!draftReadyRef.current || !user?.id) return;
     const draft: ResumeDraft = {
       model,
       mode,
@@ -445,8 +453,8 @@ export default function ResumeOptimizerPage() {
       resultContent,
       result,
     };
-    localStorage.setItem(RESUME_DRAFT_KEY, JSON.stringify(draft));
-  }, [model, mode, keywordMatch, resumeContent, jobRequirements, jobUrl, jobSummary, jobCompany, jobPosition, previewTab, resultContent, result]);
+    localStorage.setItem(`${RESUME_DRAFT_KEY}:${user.id}`, JSON.stringify(draft));
+  }, [user?.id, model, mode, keywordMatch, resumeContent, jobRequirements, jobUrl, jobSummary, jobCompany, jobPosition, previewTab, resultContent, result]);
 
   const allowedModels = useMemo(
     () => MODEL_OPTIONS.filter((option) => canUseModel(user, option.id)),
@@ -476,9 +484,19 @@ export default function ResumeOptimizerPage() {
     setStatus('正在读取简历文件');
     setResumePageImages([]);
     try {
-      const content = await extractResumeText(file);
+      if (file.size > MAX_FILE_SIZE) throw new Error('文件不能超过 20 MB，请压缩后重试');
       const isPdf = getFileExtension(file.name) === '.pdf' || file.type.includes('pdf');
-      const pageImages = isPdf && content.length < 120 ? await extractPdfPageImages(file, 3) : [];
+      let pageImages: string[] = [];
+      if (isPdf) {
+        const pdfLib = await import('pdfjs-dist');
+        const pdf = await pdfLib.getDocument({ data: await file.arrayBuffer() }).promise;
+        if (pdf.numPages > MAX_PDF_PAGES) throw new Error('PDF 不能超过 10 页，请上传精简版简历');
+        if (pdf.numPages && (await extractPdfText(file)).length < 120) {
+          if (pdf.numPages > MAX_SCANNED_PDF_PAGES) throw new Error('扫描版 PDF 最多支持 3 页，请上传精简版或可复制文本的 PDF');
+          pageImages = await extractPdfPageImages(file, MAX_SCANNED_PDF_PAGES);
+        }
+      }
+      const content = await extractResumeText(file);
       if (content.length < 20 && pageImages.length === 0) {
         throw new Error('简历文本太短，请检查文件是否可读');
       }
@@ -532,12 +550,16 @@ export default function ResumeOptimizerPage() {
   const handleOptimize = async () => {
     const resume = resumeContent.trim();
     const jd = jobRequirements.trim();
-    if (!resume) {
+    if (!resume && resumePageImages.length === 0) {
       setError('请先上传简历文件');
       return;
     }
     if (!jd) {
       setError('请先填写目标岗位 JD');
+      return;
+    }
+    if (!aiConsent) {
+      setError('请先确认同意将简历和 JD 发送给 AI 服务进行处理');
       return;
     }
 
@@ -554,9 +576,11 @@ export default function ResumeOptimizerPage() {
         jobTitle: jobPosition,
         company: jobCompany,
         resumePageImages,
+        aiConsent: true,
       });
       setResult(next);
       setResultContent(next.optimizedContent);
+      setResultReviewed(false);
       setHistoryItems((current) => [
         {
           id: next.id,
@@ -589,14 +613,22 @@ export default function ResumeOptimizerPage() {
     }
   };
 
+  const confirmExport = () => {
+    if (!activeOptimizedContent) return false;
+    if (resultReviewed) return true;
+    const confirmed = window.confirm('请确认你已检查 AI 生成稿，并对内容准确性和真实性负责。继续导出？');
+    if (confirmed) setResultReviewed(true);
+    return confirmed;
+  };
+
   const copyOptimized = async () => {
-    if (!activeOptimizedContent) return;
+    if (!confirmExport()) return;
     await navigator.clipboard.writeText(activeOptimizedContent);
     setStatus('优化稿已复制');
   };
 
   const downloadOptimizedMarkdown = () => {
-    if (!activeOptimizedContent) return;
+    if (!confirmExport()) return;
     const blob = new Blob([activeOptimizedContent], { type: 'text/markdown;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -607,7 +639,7 @@ export default function ResumeOptimizerPage() {
   };
 
   const downloadOptimizedDocx = async () => {
-    if (!activeOptimizedContent) return;
+    if (!confirmExport()) return;
     const blob = await buildDocxBlob(activeOptimizedContent);
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -619,12 +651,12 @@ export default function ResumeOptimizerPage() {
   };
 
   const downloadOptimizedPdf = () => {
-    if (!activeOptimizedContent) return;
+    if (!confirmExport()) return;
     openPrintablePdf(activeOptimizedContent, '优化简历');
   };
 
   const clearDraft = () => {
-    localStorage.removeItem(RESUME_DRAFT_KEY);
+    if (user?.id) localStorage.removeItem(`${RESUME_DRAFT_KEY}:${user.id}`);
     setResult(null);
     setResumeFile(null);
     setResumeContent('');
@@ -639,6 +671,7 @@ export default function ResumeOptimizerPage() {
     setKeywordMatch(true);
     setPreviewTab('optimized');
     setResultContent('');
+    setResultReviewed(false);
     setStatus('已清空草稿');
   };
 
@@ -817,6 +850,11 @@ export default function ResumeOptimizerPage() {
               </button>
             </div>
 
+            <label className="mt-4 flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-600">
+              <input type="checkbox" checked={aiConsent} onChange={(e) => setAiConsent(e.target.checked)} className="mt-1" />
+              <span>我同意将简历和 JD 发送给 AI 服务处理，生成内容仅供参考，我会在导出前自行核对。</span>
+            </label>
+
             {error && (
               <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
                 {error}
@@ -881,11 +919,12 @@ export default function ResumeOptimizerPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={clearDraft}
+                  onClick={() => { if (result) { setResultContent(result.originalContent); setResultReviewed(false); setStatus('已恢复原始简历'); } }}
                   className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 hover:text-rose-600"
                 >
-                  清空
+                  恢复原文
                 </button>
+                <button type="button" onClick={clearDraft} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 hover:text-rose-600">清空</button>
               </div>
             </div>
 
@@ -925,7 +964,7 @@ export default function ResumeOptimizerPage() {
                     ) : (
                       <textarea
                         value={previewTab === 'optimized' ? activeOptimizedContent : result.originalContent}
-                        onChange={previewTab === 'optimized' ? (e) => setResultContent(e.target.value) : undefined}
+                        onChange={previewTab === 'optimized' ? (e) => { setResultContent(e.target.value); setResultReviewed(false); } : undefined}
                         readOnly={previewTab !== 'optimized'}
                         className={`min-h-[560px] w-full resize-none border-0 bg-transparent text-sm leading-7 text-slate-700 outline-none ${
                           previewTab === 'optimized' ? 'rounded-lg focus:bg-white focus:p-3 focus:ring-1 focus:ring-indigo-200' : ''

@@ -21,12 +21,12 @@ export APP_RELEASE
 docker compose -f deploy/docker-compose.prod.yml up -d --build --remove-orphans
 docker compose -f deploy/docker-compose.prod.yml ps
 
-health_url=${HEALTH_URL:-http://127.0.0.1:8080/api/health}
+health_url=${HEALTH_URL:-http://127.0.0.1:8080/api/ready}
 attempt=1
 while [ "$attempt" -le 20 ]; do
   health_response=$(curl -fsS "$health_url" 2>/dev/null || true)
-  if printf '%s' "$health_response" | grep -q '"defaultModel":"gpt-5.6-sol"'; then
-    echo "发布成功：release=$APP_RELEASE，defaultModel=gpt-5.6-sol"
+  if printf '%s' "$health_response" | grep -q '"status":"ready"'; then
+    echo "发布成功：release=$APP_RELEASE"
     printf '%s\n' "$health_response"
     exit 0
   fi
@@ -34,6 +34,6 @@ while [ "$attempt" -le 20 ]; do
   sleep 2
 done
 
-echo "错误：服务未在预期时间内报告 defaultModel=gpt-5.6-sol。" >&2
+echo "错误：服务未在预期时间内通过健康检查。" >&2
 docker compose -f deploy/docker-compose.prod.yml logs --tail=200 server >&2
 exit 1

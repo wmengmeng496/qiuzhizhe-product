@@ -1,6 +1,8 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 const TOKEN_KEY = 'job_assistant_token';
 const USER_KEY = 'job_assistant_user';
+const LEGACY_LOCAL_DATA_KEYS = ['home_job_chat_history_v1', 'home_job_chat_sessions_v1', 'home_job_active_session_v1', 'optimization_records', 'resume_optimizer_draft_v2'];
+const USER_LOCAL_DATA_PREFIXES = ['home_job_chat_history_v1:', 'home_job_chat_sessions_v1:', 'home_job_active_session_v1:', 'optimization_records:', 'resume_optimizer_draft_v2:'];
 
 export interface CurrentUser {
   id: string;
@@ -37,9 +39,36 @@ export function setSession(token: string, user: CurrentUser) {
 }
 
 export function clearSession() {
+  LEGACY_LOCAL_DATA_KEYS.forEach((key) => localStorage.removeItem(key));
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
   window.dispatchEvent(new Event('auth-change'));
+}
+
+export function clearUserLocalData(userId: string) {
+  if (!userId) return;
+  USER_LOCAL_DATA_PREFIXES.forEach((prefix) => localStorage.removeItem(`${prefix}${userId}`));
+}
+
+export async function exportAccountData() {
+  return apiRequest<{ success: true; exportedAt: string; user: CurrentUser; usage: unknown; resumeOptimizations: unknown[]; orders: unknown[]; interviewReviews: unknown[] }>('/me/export');
+}
+
+export async function deleteAccountData() {
+  const user = getStoredUser();
+  const response = await apiRequest<{ success: true }>('/me/data', { method: 'DELETE' });
+  if (user?.id) clearUserLocalData(user.id);
+  return response;
+}
+
+export async function deleteAccount(confirm: string, password?: string) {
+  const user = getStoredUser();
+  const response = await apiRequest<{ success: true }>('/me', {
+    method: 'DELETE',
+    body: JSON.stringify({ confirmation: confirm, ...(password ? { password } : {}) }),
+  });
+  if (user?.id) clearUserLocalData(user.id);
+  return response;
 }
 
 export async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {

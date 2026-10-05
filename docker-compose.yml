@@ -1,4 +1,19 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: job_assistant
+      POSTGRES_USER: job_assistant
+      POSTGRES_PASSWORD: job_assistant
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U job_assistant -d job_assistant"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
   web:
     build:
       context: .
@@ -16,11 +31,18 @@ services:
       - ./.env
     environment:
       APP_RELEASE: ${APP_RELEASE:-local}
+      DATABASE_URL: postgres://job_assistant:job_assistant@postgres:5432/job_assistant
+    depends_on:
+      postgres:
+        condition: service_healthy
     expose:
       - "8787"
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/api/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 6
       start_period: 15s
+
+volumes:
+  postgres_data:

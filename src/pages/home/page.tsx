@@ -116,6 +116,10 @@ const WORKBENCH_HISTORY_WIDTH = 288;
 const DEFAULT_COMMAND = '继续优化项目经历，并保持和 JD 关键词匹配';
 const DEFAULT_WORKSPACE_MODEL: WorkspaceModel = 'server-default';
 
+function scopedLocalKey(key: string) {
+  return `${key}:${getStoredUser()?.id || 'anonymous'}`;
+}
+
 const WORKSPACE_MODELS: Array<{ id: WorkspaceModel; name: string; desc: string; badge: string; credits: number }> = [
   { id: 'server-default', name: '智能默认', desc: '优先使用 GPT-5.6 Sol，自动走兜底策略', badge: '推荐', credits: 1 },
   { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', desc: '高质量复杂简历分析与定向改写', badge: '旗舰', credits: 3 },
@@ -719,9 +723,6 @@ function hasProductManagerIntent(command: string) {
   return /产品经理|产品方向|产品岗|产品岗位|\bPM\b|product manager/i.test(command);
 }
 
-function isProductManagerResume(content: string) {
-  return /产品经理|产品方向|产品岗|\bPM\b|product manager/i.test(content);
-}
 
 function isAssistantIntroRequest(command: string) {
   return /^(你是谁|你是干嘛的|你能做什么|介绍一下你自己|help|帮助)$/i.test(command.trim());
@@ -803,7 +804,7 @@ function createBlankSession(): ChatSession {
 
 function readStoredMessages(): ChatMessage[] {
   try {
-    const raw = window.localStorage.getItem(CHAT_HISTORY_KEY);
+    const raw = window.localStorage.getItem(scopedLocalKey(CHAT_HISTORY_KEY));
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -850,8 +851,8 @@ function shouldResetSeededBlankSession(session: ChatSession) {
 
 function readChatWorkspace(): ChatWorkspace {
   try {
-    const raw = window.localStorage.getItem(CHAT_SESSIONS_KEY);
-    const activeId = window.localStorage.getItem(ACTIVE_CHAT_SESSION_KEY) || '';
+    const raw = window.localStorage.getItem(scopedLocalKey(CHAT_SESSIONS_KEY));
+    const activeId = window.localStorage.getItem(scopedLocalKey(ACTIVE_CHAT_SESSION_KEY)) || '';
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
@@ -908,7 +909,7 @@ function isOptimizationRecord(value: unknown): value is OptimizationRecord {
 
 function readLocalOptimizationRecords() {
   try {
-    const raw = window.localStorage.getItem(OPTIMIZATION_RECORDS_KEY);
+    const raw = window.localStorage.getItem(scopedLocalKey(OPTIMIZATION_RECORDS_KEY));
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -922,7 +923,7 @@ function writeLocalOptimizationRecord(record: OptimizationRecord) {
   try {
     const current = readLocalOptimizationRecords();
     const deduped = current.filter((item) => item.id !== record.id);
-    window.localStorage.setItem(OPTIMIZATION_RECORDS_KEY, JSON.stringify([record, ...deduped].slice(0, 100)));
+    window.localStorage.setItem(scopedLocalKey(OPTIMIZATION_RECORDS_KEY), JSON.stringify([record, ...deduped].slice(0, 100)));
   } catch {
     // ignore
   }
@@ -2123,6 +2124,7 @@ export default function HomePage() {
   const [optimizationStageIndex, setOptimizationStageIndex] = useState(0);
   const [uploadingResume, setUploadingResume] = useState(false);
   const [toast, setToast] = useState('');
+  const [aiConsent, setAiConsent] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const user = getStoredUser();
   const isDesktop = useIsDesktop();
@@ -2200,9 +2202,9 @@ export default function HomePage() {
   }, [activeMode, activeSessionId, command, jobRequirements, messages, result, resumeContent, selectedModel, uploadedFile]);
 
   useEffect(() => {
-    window.localStorage.setItem(CHAT_SESSIONS_KEY, JSON.stringify(sessions));
-    window.localStorage.setItem(ACTIVE_CHAT_SESSION_KEY, activeSessionId);
-    window.localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(messages));
+    window.localStorage.setItem(scopedLocalKey(CHAT_SESSIONS_KEY), JSON.stringify(sessions));
+    window.localStorage.setItem(scopedLocalKey(ACTIVE_CHAT_SESSION_KEY), activeSessionId);
+    window.localStorage.setItem(scopedLocalKey(CHAT_HISTORY_KEY), JSON.stringify(messages));
   }, [activeSessionId, messages, sessions]);
 
   const addMessage = (message: Pick<ChatMessage, 'role' | 'content'>) => {
@@ -2417,6 +2419,7 @@ ${trimmedInstruction}`,
         optimizeMode: nextMode,
         model: selectedModel,
         keywordMatch: true,
+        aiConsent: true,
       });
       const nextResult = {
         optimizedContent: next.optimizedContent,
@@ -2424,7 +2427,7 @@ ${trimmedInstruction}`,
         improvements: next.improvements,
         matchScore: next.matchScore,
       };
-      const finalResult = isProductManagerRequest && !isProductManagerResume(next.optimizedContent) ? PRODUCT_MANAGER_RESULT : nextResult;
+      const finalResult = nextResult;
       setResult(finalResult);
       rememberOptimizationRecord(buildRecordFromResult({
         result: finalResult,
@@ -2459,6 +2462,10 @@ ${trimmedInstruction}`,
   };
 
   const submitCommand = () => {
+    if (user && !aiConsent) {
+      showToast('请先确认同意将简历和 JD 发送给 AI 服务');
+      return;
+    }
     runOptimization(activeMode, command);
   };
 
@@ -2839,6 +2846,12 @@ ${trimmedInstruction}`,
                           ))}
                         </select>
                       </label>
+                      {user && (
+                        <label className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-amber-50 px-2.5 text-[11px] font-bold text-amber-800">
+                          <input type="checkbox" checked={aiConsent} onChange={(event) => setAiConsent(event.target.checked)} />
+                          同意发送给 AI
+                        </label>
+                      )}
                       <span className="inline-flex h-9 items-center rounded-lg bg-indigo-50 px-3 text-xs font-black text-indigo-600">
                         {currentModelOption.badge} · {currentModelOption.credits} 积分
                       </span>

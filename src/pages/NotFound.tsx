@@ -9,9 +9,9 @@ export default function NotFound() {
         404
       </h1>
       <div className="relative z-10">
-        <h1 className="text-xl md:text-2xl font-semibold mt-6">This page has not been generated</h1>
+        <h1 className="text-xl md:text-2xl font-semibold mt-6">页面不存在</h1>
         <p className="mt-2 text-base text-gray-400 font-mono">{location.pathname}</p>
-        <p className="mt-4 text-lg md:text-xl text-gray-500">Tell me more about this page, so I can generate it</p>
+        <p className="mt-4 text-lg md:text-xl text-gray-500">请检查链接，或返回工作台继续使用。</p>
       </div>
     </div>
   );
