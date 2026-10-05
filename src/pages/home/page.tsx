@@ -2126,7 +2126,7 @@ export default function HomePage() {
   const [uploadingResume, setUploadingResume] = useState(false);
   const [resumePageImages, setResumePageImages] = useState<string[]>([]);
   const [toast, setToast] = useState('');
-  const [aiConsent, setAiConsent] = useState(false);
+  const [aiConsent, setAiConsent] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const user = getStoredUser();
   const isDesktop = useIsDesktop();
