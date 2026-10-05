@@ -81,6 +81,9 @@ function dataUrlToVisionPart(dataUrl = '') {
 
 function looksReadableResumeText(text = '') {
   const compact = String(text).replace(/\s/g, '');
+  if (compact.includes('PDF文本层读取不完整') || compact.includes('原始项目内容待补充') || compact.includes('待补充原始项目背景')) {
+    return false;
+  }
   const cjk = (compact.match(/[\u4e00-\u9fa5]/g) || []).length;
   const meaningfulWords = (String(text).match(/[A-Za-z]{2,}|[\u4e00-\u9fa5]{2,}/g) || []).length;
   return String(text).trim().length >= 40 && (cjk >= 12 || meaningfulWords >= 8);
