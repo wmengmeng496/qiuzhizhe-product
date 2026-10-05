@@ -12,7 +12,7 @@ export const aiProvider = {
   imageEditsPath: process.env.AI_IMAGE_EDITS_PATH || '/images/edits',
   imageGenerationsPath: process.env.AI_IMAGE_GENERATIONS_PATH || '/images/generations',
   apiKey: process.env.TOAPIS_API_KEY || process.env.CUSTOM_PROXY_KEY || '',
-  timeoutMs: boundedTimeout(process.env.AI_TIMEOUT_MS, 45000, 45000),
+  timeoutMs: boundedTimeout(process.env.AI_TIMEOUT_MS, 90000, 180000),
   imageTimeoutMs: boundedTimeout(process.env.AI_IMAGE_TIMEOUT_MS, 180000, 300000),
   defaultModel: process.env.AI_DEFAULT_MODEL || process.env.TOAPIS_DEFAULT_MODEL || 'gpt-5.6-sol',
   ocrModel: process.env.AI_OCR_MODEL || process.env.TOAPIS_OCR_MODEL || 'gpt-5.6-sol',
