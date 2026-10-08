@@ -39,13 +39,27 @@ export function setSession(token: string, user: CurrentUser) {
 }
 
 export function clearSession() {
-  const user = getStoredUser();
-  if (user?.id) {
-    clearUserLocalData(user.id);
-  }
-  // Clear anonymous local keys as well
-  clearUserLocalData('anonymous');
-  LEGACY_LOCAL_DATA_KEYS.forEach((key) => localStorage.removeItem(key));
+  try {
+    const user = getStoredUser();
+    if (user?.id) {
+      clearUserLocalData(user.id);
+    }
+    clearUserLocalData('anonymous');
+    LEGACY_LOCAL_DATA_KEYS.forEach((key) => localStorage.removeItem(key));
+    // Thoroughly remove any lingering local data keys
+    const allKeys = Object.keys(localStorage);
+    for (const k of allKeys) {
+      if (
+        k.startsWith('home_job_') ||
+        k.startsWith('optimization_records') ||
+        k.startsWith('resume_optimizer_') ||
+        k === TOKEN_KEY ||
+        k === USER_KEY
+      ) {
+        localStorage.removeItem(k);
+      }
+    }
+  } catch {}
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
   window.dispatchEvent(new Event('auth-change'));
