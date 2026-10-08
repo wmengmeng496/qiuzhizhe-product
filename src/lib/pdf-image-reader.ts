@@ -9,7 +9,7 @@ async function readBuffer(file: File) {
   });
 }
 
-export async function extractPdfPageImages(file: File, maxPages = 3) {
+export async function extractPdfPageImages(file: File, maxPages = 5) {
   const lib = await import('pdfjs-dist');
   lib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
@@ -19,7 +19,7 @@ export async function extractPdfPageImages(file: File, maxPages = 3) {
 
   for (let pageNumber = 1; pageNumber <= limit; pageNumber += 1) {
     const page = await pdf.getPage(pageNumber);
-    const viewport = page.getViewport({ scale: 1.55 });
+    const viewport = page.getViewport({ scale: 1.6 });
     const canvas = document.createElement('canvas');
     const context = canvas.getContext('2d');
     if (!context) throw new Error('PDF 页面渲染失败，请重试');
@@ -32,7 +32,7 @@ export async function extractPdfPageImages(file: File, maxPages = 3) {
       viewport,
     }).promise;
 
-    pages.push(canvas.toDataURL('image/jpeg', 0.84));
+    pages.push(canvas.toDataURL('image/jpeg', 0.88));
     page.cleanup?.();
   }
 

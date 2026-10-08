@@ -36,80 +36,89 @@ function SideNav({
   const accountLabel = user?.phone || user?.email || '已登录';
 
   return (
-    <aside className="flex h-full flex-col border-r border-slate-200 bg-white px-4 py-5">
-      <Link to="/workspace" onClick={onNavigate} className="mb-7 flex items-center gap-3 px-2">
-        <img src="/logo.svg" alt="职引简历" className="h-10 w-10 rounded-xl object-contain" />
-        <div>
-          <div className="text-base font-black text-slate-900">职引简历</div>
-          <div className="text-xs font-bold text-slate-400">AI求职工作台</div>
-        </div>
-      </Link>
-
-      <nav className="space-y-1">
-        {MENU.map((item) => {
-          const active = location.pathname.startsWith(item.path);
-          return (
-            <Link
-              key={item.path}
-              to={item.path}
-              onClick={onNavigate}
-              className={`flex h-11 items-center gap-3 rounded-lg px-3 text-sm font-bold transition-colors ${
-                active ? 'bg-slate-950 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
-              }`}
-            >
-              <i className={`${item.icon} text-lg`} />
-              {item.label}
-            </Link>
-          );
-        })}
-      </nav>
-
-      <div className="mt-8 rounded-lg border border-indigo-100 bg-indigo-50 p-4">
-        <div className="text-sm font-black text-indigo-900">默认 JD 匹配</div>
-        <p className="mt-2 text-xs leading-5 text-indigo-700">所有优化都会结合目标岗位关键词，保持内容和投递方向一致。</p>
+    <aside className="flex h-full flex-col border-r border-slate-200 bg-white">
+      {/* 顶部 Brand */}
+      <div className="shrink-0 px-4 pt-5 pb-3">
+        <Link to="/workspace" onClick={onNavigate} className="flex items-center gap-3 px-2">
+          <img src="/logo.svg" alt="职引简历" className="h-10 w-10 rounded-xl object-contain" />
+          <div>
+            <div className="text-base font-black text-slate-900">职引简历</div>
+            <div className="text-xs font-bold text-slate-400">AI求职工作台</div>
+          </div>
+        </Link>
       </div>
 
-      <div className="mt-auto rounded-xl border border-slate-200 bg-slate-50 p-3">
-        {user ? (
-          <div className="space-y-3">
-            <Link
-              to="/account"
-              onClick={onNavigate}
-              className="flex items-center gap-3 rounded-lg p-1 transition-colors hover:bg-white"
-            >
-              <div className="grid h-9 w-9 place-items-center rounded-full bg-emerald-700 text-xs font-black text-white">
-                {user.displayName?.slice(0, 2).toUpperCase() || 'ZH'}
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-black text-slate-800">{user.displayName || '已登录用户'}</div>
-                <div className="truncate text-xs font-bold text-slate-400">{accountLabel}</div>
-              </div>
-              <i className="ri-arrow-right-s-line text-lg text-slate-400" />
-            </Link>
-            <div className="grid grid-cols-2 gap-2">
+      {/* 中间菜单与辅助卡片：内部自适应滚动 */}
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-2">
+        <nav className="space-y-1">
+          {MENU.map((item) => {
+            const active = location.pathname.startsWith(item.path);
+            return (
+              <Link
+                key={item.path}
+                to={item.path}
+                onClick={onNavigate}
+                className={`flex h-11 items-center gap-3 rounded-lg px-3 text-sm font-bold transition-colors ${
+                  active ? 'bg-slate-950 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
+                }`}
+              >
+                <i className={`${item.icon} text-lg`} />
+                {item.label}
+              </Link>
+            );
+          })}
+        </nav>
+
+        <div className="mt-6 rounded-lg border border-indigo-100 bg-indigo-50 p-4">
+          <div className="text-sm font-black text-indigo-900">默认 JD 匹配</div>
+          <p className="mt-2 text-xs leading-5 text-indigo-700">所有优化都会结合目标岗位关键词，保持内容和投递方向一致。</p>
+        </div>
+      </div>
+
+      {/* 底部个人中心 / 登录区：常驻置底无需滚动 */}
+      <div className="shrink-0 border-t border-slate-100 p-4 bg-white">
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 shadow-sm">
+          {user ? (
+            <div className="space-y-3">
               <Link
                 to="/account"
                 onClick={onNavigate}
-                className="inline-flex h-9 items-center justify-center gap-1 rounded-lg border border-slate-200 bg-white text-xs font-black text-slate-600 hover:text-slate-950"
+                className="flex items-center gap-3 rounded-lg p-1 transition-colors hover:bg-white"
               >
-                <i className="ri-user-settings-line text-base" />
-                个人中心
+                <div className="grid h-9 w-9 place-items-center rounded-full bg-emerald-700 text-xs font-black text-white">
+                  {user.displayName?.slice(0, 2).toUpperCase() || 'ZH'}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-black text-slate-800">{user.displayName || '已登录用户'}</div>
+                  <div className="truncate text-xs font-bold text-slate-400">{accountLabel}</div>
+                </div>
+                <i className="ri-arrow-right-s-line text-lg text-slate-400" />
               </Link>
-              <button
-                type="button"
-                onClick={onLogout}
-                className="inline-flex h-9 items-center justify-center gap-1 rounded-lg border border-slate-200 bg-white text-xs font-black text-slate-600 hover:text-rose-600"
-              >
-                <i className="ri-logout-box-r-line text-base" />
-                退出登录
-              </button>
+              <div className="grid grid-cols-2 gap-2">
+                <Link
+                  to="/account"
+                  onClick={onNavigate}
+                  className="inline-flex h-9 items-center justify-center gap-1 rounded-lg border border-slate-200 bg-white text-xs font-black text-slate-600 hover:text-slate-950"
+                >
+                  <i className="ri-user-settings-line text-base" />
+                  个人中心
+                </Link>
+                <button
+                  type="button"
+                  onClick={onLogout}
+                  className="inline-flex h-9 items-center justify-center gap-1 rounded-lg border border-slate-200 bg-white text-xs font-black text-slate-600 hover:text-rose-600"
+                >
+                  <i className="ri-logout-box-r-line text-base" />
+                  退出登录
+                </button>
+              </div>
             </div>
-          </div>
-        ) : (
-          <Link to="/auth?redirect=/workspace" onClick={onNavigate} className="flex h-10 items-center justify-center rounded-lg bg-slate-950 text-sm font-black text-white">
-            登录账号
-          </Link>
-        )}
+          ) : (
+            <Link to="/auth?redirect=/workspace" onClick={onNavigate} className="flex h-10 items-center justify-center rounded-lg bg-slate-950 text-sm font-black text-white">
+              登录账号
+            </Link>
+          )}
+        </div>
       </div>
     </aside>
   );
@@ -156,7 +165,7 @@ export default function ProductShell({ children }: { children: React.ReactNode }
   return (
     <div className="min-h-screen bg-[#f4f5f7] text-slate-900" style={{ fontFamily: "'Inter', 'PingFang SC', sans-serif" }}>
       <div className="grid min-h-screen grid-cols-1 xl:grid-cols-[244px_minmax(0,1fr)]">
-        <div className="hidden xl:block">
+        <div className="hidden xl:sticky xl:top-0 xl:h-screen xl:block">
           <SideNav user={user} onLogout={handleLogout} />
         </div>
 

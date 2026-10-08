@@ -244,7 +244,7 @@ async function extractResumeTextFromImages({ pageImages, model = aiProvider.ocrM
         model: activeModel,
         messages,
         temperature: 0.1,
-        maxTokens: 2500,
+        maxTokens: 4000,
       });
       const text = String(result?.text || '').trim();
       if (text.length > 20) {

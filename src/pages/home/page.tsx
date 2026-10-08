@@ -2324,10 +2324,12 @@ export default function HomePage() {
       
       let pageImages: string[] = [];
       const ext = getFileExtension(file.name);
-      if ((ext === '.pdf' || file.type.includes('pdf')) && usedFallback) {
+      const isPdf = ext === '.pdf' || file.type.includes('pdf');
+      // If PDF text extraction is incomplete or fallback triggered, automatically rasterize pages for OCR
+      if (isPdf && (usedFallback || content.length < 300)) {
         setStatusText('正在解析 PDF 页面图像...');
         try {
-          pageImages = await extractPdfPageImages(file, 3);
+          pageImages = await extractPdfPageImages(file, 5);
         } catch {
           // ignore page image errors
         }
@@ -2448,6 +2450,9 @@ ${trimmedInstruction}`,
       };
       const finalResult = nextResult;
       setResult(finalResult);
+      if (next.originalContent && next.originalContent.length > 20) {
+        setResumeContent(next.originalContent);
+      }
       rememberOptimizationRecord(buildRecordFromResult({
         result: finalResult,
         jobTarget,
@@ -2462,7 +2467,7 @@ ${trimmedInstruction}`,
           : isProductManagerRequest
             ? '已生成产品经理方向简历版本'
             : '已按你的指令生成新的优化简历版本',
-        apiResumeContent,
+        next.originalContent || apiResumeContent,
       );
       showToast('已按你的指令更新右侧简历');
     } catch (error) {
@@ -2636,10 +2641,28 @@ ${trimmedInstruction}`,
                       </div>
                     )}
                     {uploadedFile && (
-                      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm font-bold text-emerald-700">
-                        <i className={getUploadIcon(uploadedFile.type || uploadedFile.name)} />
-                        <span className="max-w-[280px] truncate">{uploadedFile.name}</span>
-                        <span className="text-xs text-emerald-600">{formatFileSize(uploadedFile.size)}</span>
+                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-emerald-100 bg-emerald-50/80 p-3 text-sm">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white text-emerald-600 shadow-sm">
+                            <i className={getUploadIcon(uploadedFile.type || uploadedFile.name)} />
+                          </span>
+                          <div className="min-w-0">
+                            <div className="truncate font-black text-slate-800">{uploadedFile.name}</div>
+                            <div className="text-xs font-bold text-emerald-600">{formatFileSize(uploadedFile.size)} · 原始简历已存档</div>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setResumePreviewMode('original');
+                            setDrawerOpen(true);
+                            showToast('已查看原始简历内容');
+                          }}
+                          className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-emerald-200 bg-white px-3 text-xs font-black text-emerald-700 shadow-sm transition hover:bg-emerald-50"
+                        >
+                          <i className="ri-file-text-line" />
+                          查看原始简历
+                        </button>
                       </div>
                     )}
                     {jobRequirements.trim() && !showJobPanel && (
