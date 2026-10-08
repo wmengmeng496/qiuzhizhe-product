@@ -39,6 +39,12 @@ export function setSession(token: string, user: CurrentUser) {
 }
 
 export function clearSession() {
+  const user = getStoredUser();
+  if (user?.id) {
+    clearUserLocalData(user.id);
+  }
+  // Clear anonymous local keys as well
+  clearUserLocalData('anonymous');
   LEGACY_LOCAL_DATA_KEYS.forEach((key) => localStorage.removeItem(key));
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);

@@ -31,7 +31,7 @@ export default function AccountPage() {
 
   const handleLogout = () => {
     clearSession();
-    navigate('/auth?redirect=/workspace', { replace: true });
+    window.location.href = '/auth?redirect=/workspace';
   };
 
   const handleExport = async () => {

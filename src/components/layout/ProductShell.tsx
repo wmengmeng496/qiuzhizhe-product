@@ -148,8 +148,9 @@ export default function ProductShell({ children }: { children: React.ReactNode }
 
   const handleLogout = () => {
     clearSession();
+    setUser(null);
     setMobileOpen(false);
-    navigate('/auth?redirect=/workspace', { replace: true });
+    window.location.href = '/auth?redirect=/workspace';
   };
 
   return (
