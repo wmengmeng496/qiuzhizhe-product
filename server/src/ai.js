@@ -244,11 +244,12 @@ async function extractResumeTextFromImages({ pageImages, model = aiProvider.ocrM
     },
   ];
 
-  // Try OCR model first; if fails, fall back to gemini-3.6-flash or gpt-5.6-sol
+  // Try vision OCR models: gpt-5.6-sol first (or configured model), fallback to gemini-3.6-flash, gpt-4o
   const modelsToTry = uniqueModels([
     model,
-    'gemini-3.6-flash',
     'gpt-5.6-sol',
+    'gemini-3.6-flash',
+    'gpt-4o',
   ]);
 
   for (const activeModel of modelsToTry) {

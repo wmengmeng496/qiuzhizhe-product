@@ -668,42 +668,18 @@ function OptimizationThinking({
   const progress = Math.round(((safeIndex + 1) / stages.length) * 100);
 
   return (
-    <div className="mb-3 overflow-hidden rounded-2xl border border-indigo-100 bg-indigo-50/70">
-      <div className="flex items-start gap-3 px-3 py-3">
-        <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-white text-indigo-600 shadow-sm">
-          <i className="ri-brain-line animate-pulse" />
+    <div className="mb-3 overflow-hidden rounded-xl border border-indigo-100 bg-indigo-50/70">
+      <div className="flex items-center gap-3 px-3 py-2.5">
+        <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-white text-indigo-600 shadow-sm">
+          <i className="ri-loader-4-line animate-spin text-base" />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="text-sm font-black text-slate-900">{statusText || '正在分析并匹配简历内容'}</div>
-            <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-black text-indigo-600 shadow-sm">{progress}%</span>
+          <div className="flex items-center justify-between gap-2">
+            <div className="truncate text-xs font-black text-slate-800">{statusText || '正在分析并匹配简历内容'}</div>
+            <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-black text-indigo-600 shadow-sm">{progress}%</span>
           </div>
-          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white">
+          <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-white/80">
             <div className="h-full rounded-full bg-indigo-600 transition-all duration-500" style={{ width: `${progress}%` }} />
-          </div>
-          <div className="mt-3 grid gap-2 md:grid-cols-5">
-            {stages.map((stage, index) => {
-              const done = index < safeIndex;
-              const current = index === safeIndex;
-              return (
-                <div
-                  key={stage.title}
-                  className={`rounded-xl border px-2.5 py-2 transition-colors ${
-                    current
-                      ? 'border-indigo-200 bg-white text-indigo-700 shadow-sm'
-                      : done
-                        ? 'border-emerald-100 bg-emerald-50/80 text-emerald-700'
-                        : 'border-white/70 bg-white/55 text-slate-400'
-                  }`}
-                >
-                  <div className="flex items-center gap-1.5 text-xs font-black">
-                    <i className={done ? 'ri-check-line' : stage.icon} />
-                    <span className="truncate">{stage.title}</span>
-                  </div>
-                  <div className="mt-1 line-clamp-2 text-[11px] font-bold leading-4 opacity-80">{stage.detail}</div>
-                </div>
-              );
-            })}
           </div>
         </div>
       </div>
