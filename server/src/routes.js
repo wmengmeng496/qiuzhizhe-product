@@ -43,14 +43,14 @@ export const optimizeSchema = z.object({
   keywordMatch: z.boolean().default(true),
   jobTitle: z.string().trim().max(120).optional().default(''),
   company: z.string().trim().max(120).optional().default(''),
-  resumePageImages: z.array(z.string().regex(/^data:image\/(?:jpeg|jpg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/, '简历图片必须是有效的图片数据').max(3_000_000)).max(3).optional().default([]),
+  resumePageImages: z.array(z.string().regex(/^data:image\/(?:jpeg|jpg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/, '简历图片必须是有效的图片数据').max(3_000_000)).max(5).optional().default([]),
   aiConsent: z.literal(true),
 }).superRefine((input, context) => {
   if (input.resumeContent.trim().length < 20 && input.resumePageImages.length === 0) {
-    context.addIssue({ code: z.ZodIssueCode.too_small, minimum: 20, inclusive: true, type: 'string', path: ['resumeContent'], message: '简历文本至少需要 20 个字符，或提供 1-3 张简历图片用于 OCR' });
+    context.addIssue({ code: z.ZodIssueCode.too_small, minimum: 20, inclusive: true, type: 'string', path: ['resumeContent'], message: '简历文本至少需要 20 个字符，或提供 1-5 张简历图片用于 OCR' });
   }
   if (input.resumeContent.trim().length < 20 && input.resumePageImages.length < 1) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['resumePageImages'], message: '图片简历必须提供 1-3 张图片' });
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['resumePageImages'], message: '图片简历必须提供 1-5 张图片' });
   }
 });
 

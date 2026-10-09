@@ -101,13 +101,26 @@ function dataUrlToVisionPart(dataUrl = '') {
 }
 
 function looksReadableResumeText(text = '') {
-  const compact = String(text).replace(/\s/g, '');
-  if (compact.includes('PDF文本层读取不完整') || compact.includes('原始项目内容待补充') || compact.includes('待补充原始项目背景')) {
+  const raw = String(text || '').trim();
+  if (raw.length < 30) return false;
+  const compact = raw.replace(/\s/g, '');
+  const fallbackMarkers = [
+    'PDF文本层', '读取不完整', '原始项目内容待补充', '待补充原始项目背景',
+    '待补充', '通用骨架', '占位内容', '建议补充可复制文本', '建议上传DOCX',
+    '待从原始简历中提取'
+  ];
+  if (fallbackMarkers.some(m => compact.includes(m))) {
     return false;
   }
   const cjk = (compact.match(/[\u4e00-\u9fa5]/g) || []).length;
-  const meaningfulWords = (String(text).match(/[A-Za-z]{2,}|[\u4e00-\u9fa5]{2,}/g) || []).length;
-  return String(text).trim().length >= 40 && (cjk >= 12 || meaningfulWords >= 8);
+  if (cjk < 15) {
+    const englishWords = (raw.match(/[A-Za-z]{2,}/g) || []).length;
+    const noiseWords = (raw.match(/[A-Za-z0-9]{12,}/g) || []).length;
+    if (noiseWords > englishWords * 0.4 || englishWords < 20) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function parseAiErrorDetail(text) {
@@ -474,11 +487,15 @@ export async function generateCareerPhotoWithAi(input) {
 export async function optimizeResumeWithAi(input) {
   let resumeContent = String(input.resumeContent || '').trim();
   let extractedOcrText = '';
-  if (!looksReadableResumeText(resumeContent) && Array.isArray(input.resumePageImages) && input.resumePageImages.length > 0) {
+  const hasPageImages = Array.isArray(input.resumePageImages) && input.resumePageImages.length > 0;
+  if (hasPageImages && (!looksReadableResumeText(resumeContent) || resumeContent.length < 200)) {
+    console.log("[ai:optimize] Triggering OCR, pages:", input.resumePageImages.length);
     const ocrText = await extractResumeTextFromImages({ pageImages: input.resumePageImages });
     if (looksReadableResumeText(ocrText)) {
       resumeContent = ocrText;
       extractedOcrText = ocrText;
+    } else {
+      throw new ApiError(502, '简历页面视觉识别失败，请检查 AI 模型配置后重试，或上传 DOCX/TXT 简历');
     }
   }
 

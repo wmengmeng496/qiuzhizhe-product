@@ -1042,7 +1042,7 @@ ${role}
 ${contact}
 
 个人总结
-PDF 文本层读取不完整，已先保留文件名中的候选人和岗位信息。建议补充可复制文本，或上传 DOCX / TXT 简历后继续优化。
+PDF 文本层读取不完整，优化时会通过页面图像进行 OCR 识别。也可以上传 DOCX / TXT 简历后继续优化。
 
 项目经历
 - 待补充原始项目背景、个人职责、技术方案和业务结果。
@@ -1074,7 +1074,7 @@ function buildUploadedResumeResult(content: string, usedFallback = false): Resum
     optimizedContent: content,
     keywords: ['待匹配 JD', parsed.role, '原始简历已读取'].filter(Boolean).slice(0, 6),
     improvements: usedFallback
-      ? ['PDF 文本层不可读，已先清理乱码', '建议上传 DOCX / TXT 或粘贴简历文本', '仍可先基于文件名和 JD 优化表达框架']
+      ? ['PDF 文本层不可读，优化时会通过页面图像进行 OCR 识别', '建议上传 DOCX / TXT 或粘贴简历文本', '识别完成后将基于完整简历和 JD 优化表达']
       : ['已读取上传简历', '可继续输入目标岗位或 JD', '发送后将基于当前简历生成优化版本'],
     matchScore: 68,
   };
@@ -2354,10 +2354,10 @@ export default function HomePage() {
         content: usedFallback
           ? (pageImages.length > 0
               ? `已读取简历《${file.name}》，检测到文本层包含特殊编码，已提取页面图像供 AI 视觉完整识别。`
-              : `已读取简历《${file.name}》，但 PDF 文本层不可读，已先保留文件名信息。建议上传 DOCX / TXT 或粘贴简历文本。`)
+              : `已读取简历《${file.name}》，PDF 文本层不可读，优化时会通过页面图像进行 OCR 识别。也可以上传 DOCX / TXT 或粘贴简历文本。`)
           : `已读取简历《${file.name}》，你可以继续输入目标岗位、JD 或优化要求。`,
       });
-      showToast(usedFallback && pageImages.length > 0 ? '已加载简历图像供 AI 识别' : usedFallback ? 'PDF 文本层不可读，已清理乱码' : '简历已上传并读取');
+      showToast(usedFallback && pageImages.length > 0 ? '已加载图像，优化时将进行 OCR 识别' : usedFallback ? '暂未读到可识别文本，请补充简历文字' : '简历已上传并读取');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '文件读取失败，请重试');
     } finally {
@@ -2394,7 +2394,7 @@ export default function HomePage() {
     setOptimizationFlow(shouldUseIntroWorkflow ? 'intro' : 'resume');
     setOptimizationStageIndex(0);
     setLoading(true);
-    setStatusText(shouldUseIntroWorkflow ? '正在结合岗位身份生成定向自我介绍' : '正在结合 JD 和你的指令优化右侧简历，预计需要 10-30 秒');
+    setStatusText(resumePageImages.length > 0 ? '正在识别简历图像并结合 JD 进行智能优化，预计需要 15-30 秒' : (shouldUseIntroWorkflow ? '正在结合岗位身份生成定向自我介绍' : '正在结合 JD 和你的指令优化右侧简历，预计需要 10-30 秒'));
     const baseResumeContent = resumeContent.trim() || result.optimizedContent.trim() || SAMPLE_RESUME;
     try {
       if (!user) {
