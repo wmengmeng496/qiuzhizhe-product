@@ -29,9 +29,9 @@ function extractJson(content) {
       if (match) return JSON.parse(match[0]);
     } catch {}
 
-    // Special fallback for OCR response: if it's raw text, wrap it into { text: content }
+    // Special fallback for OCR response or Markdown optimization: if it's raw text, wrap it into { text: content } or optimizedContent
     if (typeof content === 'string' && content.trim().length > 30) {
-      return { text: content.trim() };
+      return { text: content.trim(), optimizedContent: content.trim() };
     }
 
     throw new ApiError(502, 'AI 返回内容无法解析为 JSON');
@@ -514,6 +514,9 @@ export async function optimizeResumeWithAi(input) {
 
   if (extractedOcrText) {
     result.extractedResumeContent = extractedOcrText;
+  }
+  if (result && !result.optimizedContent) {
+    result.optimizedContent = result.text || result.content || result.markdown || result.resume || '';
   }
 
   // A model occasionally echoes the source resume. If similarity is very high, give it one focused rewrite pass.

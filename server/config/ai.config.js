@@ -47,7 +47,7 @@ export const aiModelMap = {
 export const aiDefaults = {
   resumeOptimize: {
     temperature: 0.4,
-    maxTokens: 3200,
+    maxTokens: 4000,
   },
   interviewQuestion: {
     temperature: 0.4,
