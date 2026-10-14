@@ -4,6 +4,7 @@ import { rateLimit } from '../src/rate-limit.js';
 import { consumeDevResumeUsage, deleteDevUserData, getDevUsage, listDevResumeOptimizations, saveDevResumeOptimization } from '../src/dev-store.js';
 import { optimizeSchema } from '../src/routes.js';
 import { planLimits } from '../src/config.js';
+import { normalizeAuthInput } from '../src/auth.js';
 
 function request(ip = '127.0.0.1') {
   return { ip };
@@ -30,6 +31,13 @@ test('rate limits are isolated per middleware instance', () => {
 
   assert.equal(firstNext, 1);
   assert.equal(secondNext, 1);
+});
+
+test('registration accepts phone or email with password and no verification code', () => {
+  const common = { password: 'secret123', termsAccepted: true, agreementVersion: '2026-07-24' };
+  assert.equal(normalizeAuthInput({ ...common, account: '13800138000' }).phone, '13800138000');
+  assert.equal(normalizeAuthInput({ ...common, account: 'USER@example.com' }).email, 'user@example.com');
+  assert.throws(() => normalizeAuthInput({ ...common, account: 'not-an-account' }));
 });
 
 test('data deletion clears content but preserves development quota usage', () => {

@@ -6,7 +6,6 @@ import { config } from './config.js';
 import { ApiError } from './errors.js';
 import { query, withTransaction } from './db.js';
 import { recordEvent } from './events.js';
-import { verifyCode } from './sms.js';
 
 const emailSchema = z.string().trim().toLowerCase().email();
 const phoneSchema = z.string().trim().regex(/^1[3-9]\d{9}$/, '请输入有效的 11 位手机号');
@@ -21,7 +20,6 @@ const authSchema = z.object({
   displayName: z.string().trim().max(80).optional(),
   termsAccepted: z.boolean().optional(),
   agreementVersion: z.string().trim().max(20).optional(),
-  smsCode: z.string().regex(/^\d{6}$/).optional(),
 });
 
 function publicUser(row) {
@@ -85,7 +83,7 @@ function defaultDisplayName(account) {
   return email.split('@')[0].slice(0, 24) || '求职用户';
 }
 
-function normalizeAuthInput(body, { requireContact = true } = {}) {
+export function normalizeAuthInput(body, { requireContact = true } = {}) {
   const parsed = authSchema.parse(body);
   const rawAccount = (parsed.account || parsed.email || parsed.phone || '').trim();
   const looksLikePhone = /^1[3-9]\d{9}$/.test(rawAccount);
@@ -192,9 +190,6 @@ export async function register(req, res) {
   const input = normalizeAuthInput(req.body);
   if (!input.termsAccepted || input.agreementVersion !== CURRENT_AGREEMENT_VERSION) {
     throw new ApiError(400, '请阅读并同意当前版本的用户协议和隐私政策');
-  }
-  if (input.phone && (!input.smsCode || !verifyCode(input.phone, input.smsCode))) {
-    throw new ApiError(400, '短信验证码错误或已过期');
   }
   const passwordHash = await bcrypt.hash(input.password, 10);
   const displayName = input.displayName || defaultDisplayName(input.account);

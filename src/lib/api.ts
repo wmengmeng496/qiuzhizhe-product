@@ -128,7 +128,6 @@ export async function register(
   password: string,
   displayName: string | undefined,
   termsAccepted: boolean,
-  smsCode?: string,
 ): Promise<AuthResponse> {
   const data = await apiRequest<AuthResponse>('/auth/register', {
     method: 'POST',
@@ -138,17 +137,10 @@ export async function register(
       displayName,
       termsAccepted,
       agreementVersion: '2026-07-24',
-      smsCode,
     }),
   });
   setSession(data.token, data.user);
   return data;
-}
-
-export async function sendSmsCode(phone: string) {
-  return apiRequest<{ success: true; message: string }>('/auth/sms/send', {
-    method: 'POST', body: JSON.stringify({ phone }),
-  });
 }
 
 export async function getWechatLoginConfig(redirect = '/') {
