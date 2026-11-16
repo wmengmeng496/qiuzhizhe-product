@@ -5,6 +5,7 @@ import { consumeDevResumeUsage, deleteDevUserData, getDevUsage, listDevResumeOpt
 import { optimizeSchema } from '../src/routes.js';
 import { planLimits } from '../src/config.js';
 import { normalizeAuthInput } from '../src/auth.js';
+import { storeVerificationCode, verifyCode } from '../src/sms.js';
 
 function request(ip = '127.0.0.1') {
   return { ip };
@@ -40,6 +41,27 @@ test('registration accepts phone or email with password and no verification code
   assert.throws(() => normalizeAuthInput({ ...common, account: 'not-an-account' }));
 });
 
+
+test('SMS codes are one-time and isolated by purpose', () => {
+  const phone = '13800138000';
+  storeVerificationCode(phone, '123456', 'login');
+  assert.equal(verifyCode(phone, '123456', 'reset'), false);
+  assert.equal(verifyCode(phone, '123456', 'login'), true);
+  assert.equal(verifyCode(phone, '123456', 'login'), false);
+});
+
+test('SMS codes expire and are invalidated after five failed attempts', () => {
+  const phone = '13900139000';
+  storeVerificationCode(phone, '654321', 'login', Date.now() - 1);
+  assert.equal(verifyCode(phone, '654321', 'login'), false);
+
+  storeVerificationCode(phone, '654321', 'reset');
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    assert.equal(verifyCode(phone, '000000', 'reset'), false);
+  }
+  assert.equal(verifyCode(phone, '654321', 'reset'), false);
+});
+
 test('data deletion clears content but preserves development quota usage', () => {
   const user = { id: 'quota-regression-user', plan: 'free' };
   deleteDevUserData(user.id);
@@ -52,15 +74,15 @@ test('data deletion clears content but preserves development quota usage', () =>
   assert.deepEqual(listDevResumeOptimizations(user.id), []);
 });
 
-test('resume schema accepts OCR-only input with up to three valid images', () => {
+test('resume schema accepts OCR-only input with up to five valid images', () => {
   const image = 'data:image/png;base64,AA==';
   const parsed = optimizeSchema.parse({
     resumeContent: '',
     jobRequirements: 'A'.repeat(20),
-    resumePageImages: [image, image, image],
+    resumePageImages: [image, image, image, image, image],
     aiConsent: true,
   });
-  assert.equal(parsed.resumePageImages.length, 3);
+  assert.equal(parsed.resumePageImages.length, 5);
 });
 
 test('resume schema rejects textless input without consent, images, or excessive pages', () => {
@@ -69,7 +91,20 @@ test('resume schema rejects textless input without consent, images, or excessive
   assert.throws(() => optimizeSchema.parse({ ...base, resumePageImages: ['data:image/png;base64,AA=='], aiConsent: false }));
   assert.throws(() => optimizeSchema.parse({
     ...base,
-    resumePageImages: Array.from({ length: 4 }, () => 'data:image/png;base64,AA=='),
+    resumePageImages: Array.from({ length: 6 }, () => 'data:image/png;base64,AA=='),
+    aiConsent: true,
+  }));
+});
+
+test('resume schema rejects OCR images that exceed the total request budget', () => {
+  assert.throws(() => optimizeSchema.parse({
+    resumeContent: '',
+    jobRequirements: 'A'.repeat(20),
+    resumePageImages: [
+      `data:image/png;base64,${'A'.repeat(2_999_960)}`,
+      `data:image/png;base64,${'A'.repeat(2_999_960)}`,
+      `data:image/png;base64,${'A'.repeat(100)}`,
+    ],
     aiConsent: true,
   }));
 });

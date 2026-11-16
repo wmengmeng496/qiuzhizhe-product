@@ -1,0 +1,33 @@
+{
+  "name": "zhiyin-resume-expert",
+  "version": "1.0.0",
+  "description": "AI resume optimization expert connected to the Zhiyin Resume workspace",
+  "author": { "name": "职引简历", "email": "support@qiuzhijianli.xyz" },
+  "agents": ["./agents/zhiyin-resume-expert.md"],
+  "expertType": "agent",
+  "agentName": "zhiyin-resume-expert",
+  "displayName": { "en": "Zhiyin Resume Coach", "zh": "职引简历专家" },
+  "profession": { "en": "AI Resume Optimization Coach", "zh": "AI 简历优化与求职表达顾问" },
+  "displayDescription": {
+    "en": "Analyzes target roles, rewrites resumes with evidence-based language, and saves each optimized version to your Zhiyin Resume workspace.",
+    "zh": "围绕目标岗位拆解要求、优化简历表达与关键词匹配，并将每次优化版本同步保存到职引简历工作台。"
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "09-OperationsHR",
+  "defaultInitPrompt": { "zh": "根据目标岗位帮我优化简历", "en": "Optimize my resume for a target role" },
+  "plugin": "zhiyin-resume-expert",
+  "tags": [
+    { "en": "Resume", "zh": "简历优化" },
+    { "en": "Job Search", "zh": "求职辅导" },
+    { "en": "ATS", "zh": "关键词匹配" }
+  ],
+  "quickPrompts": [
+    { "en": "Optimize my resume for a target role", "zh": "根据目标岗位帮我优化简历" },
+    { "en": "Review my latest resume versions", "zh": "查看我最近的简历优化记录" },
+    { "en": "Check my account plan and quota", "zh": "查看我的套餐和剩余额度" }
+  ],
+  "dependencies": { "mcpServers": "./.mcp.json" },
+  "homepage": "https://www.qiuzhijianli.xyz",
+  "license": "Proprietary",
+  "keywords": ["resume", "job-search", "ats", "career"]
+}

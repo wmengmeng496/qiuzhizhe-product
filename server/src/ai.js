@@ -68,7 +68,7 @@ function contentSimilarity(left = '', right = '') {
 
 function shouldTryNextModel(status, detail) {
   return (
-    ((status === 400 || status === 404) && /model|模型|channel|渠道|sku/i.test(detail)) ||
+    ((status === 400 || status === 404) && /model|模型|channel|渠道|sku|vision|multimodal|image.*(?:unsupported|not supported)|图片.*(?:不支持|能力)/i.test(detail)) ||
     /ChannelCapability|未配置渠道|SKU 路由|model[_ -]?not[_ -]?found|模型.*(?:不存在|未配置)/i.test(detail)
   );
 }
@@ -224,121 +224,66 @@ async function generateImageFromPrompt({ prompt, model, signal }) {
   throw new ApiError(502, '图片生成服务没有返回图片');
 }
 
-async function extractResumeTextFromImages({ pageImages, model = aiProvider.ocrModel }) {
+async function extractResumeTextFromImages({ pageImages, model = aiProvider.ocrModel, deadline }) {
   if (!Array.isArray(pageImages) || pageImages.length === 0) return '';
 
-  const messages = [
-    {
-      role: 'system',
-      content: '你是专业简历文本识别助手。必须从图片中尽可能完整、准确地提取简历文字，保留原有顺序、标题、项目符号、日期和联系方式，只返回严格 JSON。',
-    },
-    {
-      role: 'user',
-      content: [
-        {
-          type: 'text',
-          text: `请识别以下 PDF 页面图片中的全部可见简历文字，并输出 JSON：\n{\n  "text": "按原顺序整理后的完整文本"\n}\n\n要求：\n1. 尽量保留原文，不要改写语义。\n2. 按页面和阅读顺序输出。\n3. 版式可简化，但不要漏掉姓名、岗位、经历、项目、技能和联系方式。\n4. 如果有少量看不清的字，请用“[不清晰]”标记，不要编造。`,
-        },
-        ...pageImages.map((dataUrl) => dataUrlToVisionPart(dataUrl)),
-      ],
-    },
-  ];
-
-  // Try vision OCR models: gpt-5.6-sol first (or configured model), fallback to gemini-3.6-flash, gpt-4o
-  const modelsToTry = uniqueModels([
-    model,
-    'gpt-5.6-sol',
-    'gemini-3.6-flash',
-    'gpt-4o',
-  ]);
-
-  for (const activeModel of modelsToTry) {
-    try {
-      const result = await callAiJsonDirect({
-        model: activeModel,
-        messages,
-        temperature: 0.1,
-        maxTokens: 4000,
-      });
-      const text = String(result?.text || '').trim();
-      if (text.length > 20) {
-        console.log(`[ai:ocr] Successfully extracted ${text.length} chars using model ${activeModel}`);
-        return text;
-      }
-    } catch (err) {
-      console.warn(`[ai:ocr] Model ${activeModel} failed: ${err.message}`);
-    }
-  }
-
-  return '';
-}
-
-async function callAiJsonDirect({ model, messages, temperature = 0.5, maxTokens = 4000 }) {
-  if (!config.ai.key) {
-    throw new ApiError(503, 'AI 服务还没有配置密钥，请先配置 TOAPIS_API_KEY 或 CUSTOM_PROXY_KEY');
-  }
-
-  const protectedPayload = redactAiMessages(messages);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 60000);
-
-  try {
-    const isGemini = String(model).toLowerCase().includes('gemini');
-    const response = await fetch(config.ai.url, {
-      method: 'POST',
-      signal: controller.signal,
-      headers: {
-        Authorization: `Bearer ${config.ai.key}`,
-        'Content-Type': 'application/json',
+  const pageTexts = [];
+  let activeModel = model;
+  for (let index = 0; index < pageImages.length; index += 1) {
+    const pageNumber = index + 1;
+    const messages = [
+      {
+        role: 'system',
+        content: '你是专业简历文本识别助手。必须从图片中尽可能完整、准确地提取简历文字，保留原有顺序、标题、项目符号、日期和联系方式，只返回严格 JSON。',
       },
-      body: JSON.stringify({
-        model,
-        messages: protectedPayload.messages,
-        temperature,
-        max_tokens: maxTokens,
-        ...(isGemini ? {} : { response_format: aiProvider.responseFormat }),
-        ...(model.startsWith('gpt-5.6') ? { reasoning_effort: 'none' } : {}),
-      }),
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: `这是简历第 ${pageNumber}/${pageImages.length} 页。请识别全部可见文字并输出 JSON：\n{\n  "text": "按阅读顺序整理的完整文字",\n  "blank": false\n}\n\n要求：\n1. 尽量保留原文，不要改写语义。\n2. 保留标题、项目符号、日期和联系方式。\n3. 忽略页面顶部重复出现的哈希水印字符串。\n4. 如果页面为空白，返回 {"text":"","blank":true}。\n5. 如果有少量看不清的字，请用“[不清晰]”标记，不要编造。`,
+          },
+          dataUrlToVisionPart(pageImages[index]),
+        ],
+      },
+    ];
+
+    const result = await callAiJson({
+      model: activeModel,
+      modelCandidates: [activeModel, model, ...(aiProvider.ocrFallbackModels || [])],
+      messages,
+      temperature: 0.1,
+      maxTokens: 5000,
+      deadline,
     });
-
-    const text = await response.text();
-    if (!response.ok) {
-      const detail = parseAiErrorDetail(text);
-      console.error('[ai:direct_error]', model, response.status, detail.message);
-      throw new ApiError(502, detail.message);
+    activeModel = String(result?.model || activeModel);
+    const pageText = String(result?.text || '').trim();
+    if (result?.blank === true && !pageText) continue;
+    if (pageText.length < 20) {
+      throw new ApiError(502, `简历第 ${pageNumber} 页视觉识别失败，请重试或上传 DOCX/TXT 简历`);
     }
-
-    const data = JSON.parse(text);
-    const content = data?.choices?.[0]?.message?.content;
-    if (!content) throw new ApiError(502, 'AI 返回内容为空');
-
-    return extractJson(content);
-  } finally {
-    clearTimeout(timer);
+    pageTexts.push(pageImages.length === 1 ? pageText : `===== 第 ${pageNumber} 页 =====\n${pageText}`);
   }
+
+  return pageTexts.join('\n\n').trim();
 }
 
-export async function callAiJson({ model, messages, temperature = 0.5, maxTokens = 4000 }) {
+export async function callAiJson({ model, modelCandidates, messages, temperature = 0.5, maxTokens = 4000, deadline: suppliedDeadline }) {
   if (!config.ai.key) {
     throw new ApiError(503, 'AI 服务还没有配置密钥，请先配置 TOAPIS_API_KEY 或 CUSTOM_PROXY_KEY');
   }
 
-  const modelsToTry = uniqueModels([
-    model,
-    aiProvider.defaultModel,
-    ...(aiProvider.fallbackModels || []),
-  ]);
+  const modelsToTry = uniqueModels(Array.isArray(modelCandidates) && modelCandidates.length > 0
+    ? modelCandidates
+    : [model, aiProvider.defaultModel, ...(aiProvider.fallbackModels || [])]);
   const protectedPayload = redactAiMessages(messages);
-  const errors = [];
-  const deadline = Date.now() + config.ai.timeoutMs;
+  const deadline = Math.min(suppliedDeadline ?? Infinity, Date.now() + config.ai.timeoutMs);
 
   for (const activeModel of modelsToTry) {
     const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) break;
-    // Cap individual model call to at most 60s so fallbacks can execute if one hangs
-    const perModelTimeout = Math.min(60000, remainingMs);
+    if (remainingMs <= 0) throw new ApiError(504, 'AI 处理超时，请稍后重试');
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), perModelTimeout);
+    const timer = setTimeout(() => controller.abort(), remainingMs);
 
     try {
       const isGemini = String(activeModel).toLowerCase().includes('gemini');
@@ -362,24 +307,22 @@ export async function callAiJson({ model, messages, temperature = 0.5, maxTokens
       const text = await response.text();
       if (!response.ok) {
         const detail = parseAiErrorDetail(text);
-        console.error('[ai:upstream_error]', response.status, detail.code, detail.message, text.slice(0, 300));
-        errors.push('模型不可用');
+        console.error('[ai:upstream_error]', response.status, detail.code);
+        if ([408, 504, 524].includes(response.status)) throw new ApiError(504, 'AI 处理超时，请稍后重试');
         if (shouldTryNextModel(response.status, `${detail.code} ${detail.message}`)) continue;
-        throw new ApiError(502, `上游 AI 服务报错 (${response.status})：${detail.message}`);
+        throw new ApiError(502, '上游 AI 服务暂时不可用，请稍后重试');
       }
 
       let data;
       try {
         data = JSON.parse(text);
       } catch {
-        errors.push('上游 AI 服务返回了无效 JSON');
-        continue;
+        throw new ApiError(502, '上游 AI 服务返回了无效 JSON');
       }
 
       const content = data?.choices?.[0]?.message?.content;
       if (!content) {
-        errors.push('AI 返回内容为空');
-        continue;
+        throw new ApiError(502, 'AI 返回内容为空');
       }
 
       return restoreAiResult({
@@ -388,12 +331,11 @@ export async function callAiJson({ model, messages, temperature = 0.5, maxTokens
       }, protectedPayload.replacements);
     } catch (error) {
       if (error?.name === 'AbortError') {
-        errors.push(`${activeModel} 超时`);
+        if (Date.now() >= deadline) throw new ApiError(504, 'AI 处理超时，请稍后重试');
         continue;
       }
       if (!(error instanceof ApiError)) {
-        errors.push(`${activeModel} 连接异常`);
-        continue;
+        throw new ApiError(503, 'AI 服务暂时无法连接，请稍后再试');
       }
       throw error;
     } finally {
@@ -401,12 +343,7 @@ export async function callAiJson({ model, messages, temperature = 0.5, maxTokens
     }
   }
 
-  const errorSummary = errors.slice(0, 3).join('；');
-  const allTimedOut = errors.length > 0 && errors.every((item) => /请求超时|网关超时|timeout/i.test(item));
-  if (allTimedOut) {
-    throw new ApiError(504, `AI 模型处理超时：${errorSummary}`);
-  }
-  throw new ApiError(502, `AI 模型暂时不可用：${errorSummary}`);
+  throw new ApiError(502, 'AI 模型暂时不可用，请检查模型配置后重试');
 }
 
 export async function generateCareerPhotoWithAi(input) {
@@ -486,18 +423,22 @@ export async function generateCareerPhotoWithAi(input) {
 }
 
 export async function optimizeResumeWithAi(input) {
+  const deadline = Date.now() + aiProvider.resumeTimeoutMs;
   let resumeContent = String(input.resumeContent || '').trim();
   let extractedOcrText = '';
   const hasPageImages = Array.isArray(input.resumePageImages) && input.resumePageImages.length > 0;
-  if (hasPageImages && (!looksReadableResumeText(resumeContent) || resumeContent.length < 200)) {
-    console.log("[ai:optimize] Triggering OCR, pages:", input.resumePageImages.length);
-    const ocrText = await extractResumeTextFromImages({ pageImages: input.resumePageImages });
+  if (hasPageImages) {
+    const ocrText = await extractResumeTextFromImages({ pageImages: input.resumePageImages, deadline });
     if (looksReadableResumeText(ocrText)) {
       resumeContent = ocrText;
       extractedOcrText = ocrText;
     } else {
       throw new ApiError(502, '简历页面视觉识别失败，请检查 AI 模型配置后重试，或上传 DOCX/TXT 简历');
     }
+  }
+
+  if (!looksReadableResumeText(resumeContent)) {
+    throw new ApiError(400, '简历文本无法读取，请上传清晰图片或可复制文本的 DOCX/TXT 简历');
   }
 
   const modeInstruction = resumeOptimizeModes[input.optimizeMode] || resumeOptimizeModes.full;
@@ -511,40 +452,34 @@ export async function optimizeResumeWithAi(input) {
     temperature: aiDefaults.resumeOptimize.temperature,
     maxTokens: aiDefaults.resumeOptimize.maxTokens,
     messages,
+    deadline,
   });
 
-  if (extractedOcrText) {
-    result.extractedResumeContent = extractedOcrText;
-  }
-  if (result && !result.optimizedContent) {
-    result.optimizedContent = result.text || result.content || result.markdown || result.resume || '';
-  }
+  const normalizeContent = (value) => String(value?.optimizedContent || value?.text || value?.content || value?.markdown || value?.resume || '').trim();
+  result.optimizedContent = normalizeContent(result);
+  if (!result.optimizedContent) throw new ApiError(502, 'AI 没有返回优化后的简历内容');
 
-  // A model occasionally echoes the source resume. If similarity is very high, give it one focused rewrite pass.
-  // Do not abruptly throw 502 to user if similarity is slightly high, accept the result or rewrite.
-  const source = resumeContent;
-  const optimized = String(result?.optimizedContent || '').trim();
-  if (contentSimilarity(source, optimized) > 0.96) {
-    try {
-      const secondPass = await callAiJson({
-        model: input.model || aiProvider.defaultModel,
-        temperature: 0.65,
-        maxTokens: aiDefaults.resumeOptimize.maxTokens,
-        messages: [
-          ...messages,
-          {
-            role: 'user',
-            content: '上一版与原简历差异不足，不能原样复述。请针对目标岗位重点改写项目经历、技能与工作职责表达，至少修改 8 处具体语句；不得凭空捏造经历。',
-          },
-        ],
-      });
-      if (secondPass?.optimizedContent) {
-        result = secondPass;
-      }
-    } catch (e) {
-      console.warn('[ai:resume] Second pass rewrite failed:', e.message);
+  // Give an echoed resume one focused rewrite pass, then reject unchanged output.
+  if (contentSimilarity(resumeContent, result.optimizedContent) > 0.96) {
+    result = await callAiJson({
+      model: input.model || aiProvider.defaultModel,
+      temperature: 0.65,
+      maxTokens: aiDefaults.resumeOptimize.maxTokens,
+      deadline,
+      messages: [
+        ...messages,
+        {
+          role: 'user',
+          content: '上一版与原简历差异不足，不能原样复述。请针对目标岗位重点改写项目经历、技能与工作职责表达，至少修改 8 处具体语句；不得凭空捏造经历。',
+        },
+      ],
+    });
+    result.optimizedContent = normalizeContent(result);
+    if (!result.optimizedContent || contentSimilarity(resumeContent, result.optimizedContent) > 0.96) {
+      throw new ApiError(502, 'AI 未能有效优化简历，请重试或选择单个模块优化');
     }
   }
+  if (extractedOcrText) result.extractedResumeContent = extractedOcrText;
   return result;
 }
 

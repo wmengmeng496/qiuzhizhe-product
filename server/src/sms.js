@@ -8,9 +8,21 @@ const codes = new Map();
 const lastSent = new Map();
 const failedAttempts = new Map();
 const MAX_VERIFY_ATTEMPTS = 5;
+const CODE_TTL_MS = 5 * 60_000;
+const PURPOSES = new Set(['login', 'reset']);
+
+function codeKey(phone, purpose) {
+  return `${purpose}:${phone}`;
+}
+
+function readPurpose(value) {
+  const purpose = String(value || 'login').trim();
+  if (!PURPOSES.has(purpose)) throw new ApiError(400, '不支持的验证码用途');
+  return purpose;
+}
 
 function client() {
-  if (!config.sms.accessKeyId || !config.sms.accessKeySecret) {
+  if (!config.sms.accessKeyId || !config.sms.accessKeySecret || !config.sms.signName || !config.sms.templateCode) {
     throw new ApiError(503, '短信服务尚未配置，请联系管理员');
   }
   return new Dysmsapi20170525(new $OpenApi.Config({
@@ -23,6 +35,8 @@ function client() {
 export async function sendCode(req, res) {
   const phone = String(req.body?.phone || '').trim();
   if (!/^1[3-9]\d{9}$/.test(phone)) throw new ApiError(400, '请输入有效的 11 位手机号');
+  const purpose = readPurpose(req.body?.purpose);
+  const key = codeKey(phone, purpose);
   const now = Date.now();
   if (now - (lastSent.get(phone) || 0) < 60_000) throw new ApiError(429, '验证码发送过于频繁，请稍后再试');
   const code = String(randomInt(100000, 1000000));
@@ -34,28 +48,35 @@ export async function sendCode(req, res) {
   });
   const result = await client().sendSms(request);
   if (result.body?.code && result.body.code !== 'OK') throw new ApiError(502, result.body.message || '短信发送失败');
-  codes.set(phone, { code, expiresAt: now + 5 * 60_000 });
-  failedAttempts.delete(phone);
+  codes.set(key, { code, expiresAt: now + CODE_TTL_MS });
+  failedAttempts.delete(key);
   lastSent.set(phone, now);
   res.json({ success: true, message: '验证码已发送' });
 }
 
-export function verifyCode(phone, code) {
-  const item = codes.get(phone);
+export function verifyCode(phone, code, purpose = 'login') {
+  const key = codeKey(String(phone || '').trim(), readPurpose(purpose));
+  const item = codes.get(key);
   if (!item || item.expiresAt < Date.now()) {
-    codes.delete(phone);
-    failedAttempts.delete(phone);
+    codes.delete(key);
+    failedAttempts.delete(key);
     return false;
   }
   if (item.code !== code) {
-    const attempts = (failedAttempts.get(phone) || 0) + 1;
+    const attempts = (failedAttempts.get(key) || 0) + 1;
     if (attempts >= MAX_VERIFY_ATTEMPTS) {
-      codes.delete(phone);
-      failedAttempts.delete(phone);
-    } else failedAttempts.set(phone, attempts);
+      codes.delete(key);
+      failedAttempts.delete(key);
+    } else failedAttempts.set(key, attempts);
     return false;
   }
-  codes.delete(phone);
-  failedAttempts.delete(phone);
+  codes.delete(key);
+  failedAttempts.delete(key);
   return true;
+}
+
+export function storeVerificationCode(phone, code, purpose = 'login', expiresAt = Date.now() + CODE_TTL_MS) {
+  const key = codeKey(String(phone || '').trim(), readPurpose(purpose));
+  codes.set(key, { code: String(code), expiresAt });
+  failedAttempts.delete(key);
 }

@@ -8,6 +8,7 @@ import { config, validateProductionConfig } from './config.js';
 import router from './routes.js';
 import { errorHandler, notFound, ApiError } from './errors.js';
 import { applySchema } from './schema.js';
+import { oauthAuthorizationServerMetadata, oauthProtectedResourceMetadata } from './workbuddy.js';
 
 const app = express();
 const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -35,7 +36,10 @@ app.use(cors({
   credentials: true,
 }));
 app.use(express.json({ limit: '8mb' }));
+app.use(express.urlencoded({ extended: false }));
 
+app.get('/.well-known/oauth-protected-resource', oauthProtectedResourceMetadata);
+app.get('/.well-known/oauth-authorization-server', oauthAuthorizationServerMetadata);
 app.use('/api', router);
 app.use(express.static(staticDir));
 app.get('*', (req, res, next) => {

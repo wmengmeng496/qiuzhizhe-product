@@ -1,6 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom';
-import { clearSession, deleteAccount, deleteAccountData, exportAccountData, getStoredUser } from '@/lib/api';
-import { useState } from 'react';
+import { clearSession, deleteAccount, deleteAccountData, exportAccountData, getStoredUser, listOAuthConnections, revokeOAuthConnection } from '@/lib/api';
+import type { OAuthConnection } from '@/lib/api';
+import { useEffect, useState } from 'react';
 
 const PLAN_LABELS = {
   free: '免费版',
@@ -28,6 +29,15 @@ export default function AccountPage() {
   const [deleteConfirmation, setDeleteConfirmation] = useState('');
   const [deletePassword, setDeletePassword] = useState('');
   const [deleting, setDeleting] = useState(false);
+  const [connections, setConnections] = useState<OAuthConnection[]>([]);
+  const [connectionLoading, setConnectionLoading] = useState(true);
+
+  useEffect(() => {
+    listOAuthConnections()
+      .then((response) => setConnections(response.connections))
+      .catch(() => setConnections([]))
+      .finally(() => setConnectionLoading(false));
+  }, []);
 
   const handleLogout = () => {
     clearSession();
@@ -50,6 +60,18 @@ export default function AccountPage() {
     setAccountError(''); setAccountAction('正在删除数据…');
     try { await deleteAccountData(); setAccountAction('账号数据已删除'); }
     catch (error) { setAccountAction(''); setAccountError(error instanceof Error ? error.message : '删除失败，请稍后重试'); }
+  };
+
+  const handleRevokeConnection = async (clientId: string) => {
+    if (!window.confirm('确定撤销这个 WorkBuddy 连接吗？撤销后需要重新授权才能继续使用专家工具。')) return;
+    setAccountError('');
+    try {
+      await revokeOAuthConnection(clientId);
+      setConnections((current) => current.filter((item) => item.client_id !== clientId));
+      setAccountAction('WorkBuddy 连接已撤销');
+    } catch (error) {
+      setAccountError(error instanceof Error ? error.message : '撤销失败，请稍后重试');
+    }
   };
 
   const handleDeleteAccount = async () => {
@@ -106,6 +128,24 @@ export default function AccountPage() {
             <div className="text-xs font-black text-slate-400">注册时间</div>
             <div className="mt-3 text-xl font-black text-slate-950">{formatDate(user.createdAt)}</div>
             <p className="mt-2 text-sm leading-6 text-slate-500">账号信息保存在当前登录会话中。</p>
+          </div>
+        </section>
+
+        <section className="rounded-lg border border-slate-200 bg-white p-5">
+          <h2 className="text-lg font-black text-slate-950">WorkBuddy 连接</h2>
+          <p className="mt-2 text-sm leading-6 text-slate-500">管理已授权使用当前账号的 WorkBuddy 专家或连接器。</p>
+          <div className="mt-4 space-y-3">
+            {connectionLoading && <p className="text-sm font-bold text-slate-400">正在读取连接状态…</p>}
+            {!connectionLoading && connections.length === 0 && <p className="rounded-lg bg-slate-50 px-4 py-3 text-sm font-bold text-slate-500">当前没有有效的 WorkBuddy 连接。</p>}
+            {connections.map((connection) => (
+              <div key={connection.client_id} className="flex flex-col gap-3 rounded-lg border border-slate-200 p-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="text-sm font-black text-slate-950">{connection.client_name || 'WorkBuddy Connector'}</div>
+                  <div className="mt-1 text-xs font-bold text-slate-400">授权时间：{formatDate(connection.connected_at)}</div>
+                </div>
+                <button type="button" onClick={() => handleRevokeConnection(connection.client_id)} className="rounded-lg border border-rose-200 px-4 py-2 text-sm font-black text-rose-700 hover:bg-rose-50">撤销连接</button>
+              </div>
+            ))}
           </div>
         </section>
 

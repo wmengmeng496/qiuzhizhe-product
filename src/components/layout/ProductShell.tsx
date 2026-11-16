@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { clearSession, getMe, getStoredUser, type CurrentUser } from '@/lib/api';
 
 const MENU = [
@@ -128,7 +128,6 @@ export default function ProductShell({ children }: { children: React.ReactNode }
   const [mobileOpen, setMobileOpen] = useState(false);
   const [user, setUser] = useState<CurrentUser | null>(() => getStoredUser());
   const location = useLocation();
-  const navigate = useNavigate();
 
   useEffect(() => {
     const syncUser = () => setUser(getStoredUser());

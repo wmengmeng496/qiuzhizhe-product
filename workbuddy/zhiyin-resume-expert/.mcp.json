@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "zhiyin-resume": {
+      "type": "streamableHttp",
+      "url": "https://www.qiuzhijianli.xyz/api/mcp",
+      "x-workbuddy": {
+        "displayName": { "zh": "职引简历账号", "en": "Zhiyin Resume Account" },
+        "description": { "zh": "登录或注册职引简历，授权后可优化简历、读取历史版本并同步会员额度。", "en": "Sign in or register, then connect resume optimization, history, and plan quota." },
+        "icon": "./avatars/expert.png",
+        "auth": { "type": "oauth" }
+      }
+    }
+  }
+}

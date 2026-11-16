@@ -2,9 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { createResumeOptimization } from '@/lib/backend-service';
 import { fetchJobDescription, getStoredUser } from '@/lib/api';
-import { extractPdfText } from '@/lib/pdf-reader';
-import { extractPdfPageImages } from '@/lib/pdf-image-reader';
-import { extractDocxText } from '@/lib/docx-reader';
+import { hasReadableResumeText, readResumeFile } from '@/lib/resume-file-reader';
 import type { OptimizeMode } from '../resume-optimizer/page';
 
 type ResumeStyle = 'clean' | 'tech' | 'consulting' | 'dark';
@@ -44,7 +42,7 @@ interface UploadedResumeFile {
 interface JobTarget {
   company: string;
   role: string;
-  source: 'paste' | 'boss' | 'sample';
+  source: 'paste' | 'boss';
   content: string;
   keywords: string[];
 }
@@ -114,7 +112,6 @@ const ACTIVE_CHAT_SESSION_KEY = 'home_job_active_session_v1';
 const OPTIMIZATION_RECORDS_KEY = 'optimization_records';
 const SHELL_SIDEBAR_WIDTH = 244;
 const WORKBENCH_HISTORY_WIDTH = 288;
-const DEFAULT_COMMAND = '继续优化项目经历，并保持和 JD 关键词匹配';
 const DEFAULT_WORKSPACE_MODEL: WorkspaceModel = 'server-default';
 
 function scopedLocalKey(key: string) {
@@ -277,7 +274,8 @@ const INTRO_ROLE_GUIDES: Record<Exclude<IntroRoleType, 'auto'>, { label: string;
   },
 };
 
-const SAMPLE_RESUME = `王同学
+// Exact legacy seed values are retained only to migrate stored workspaces.
+const LEGACY_SEEDED_RESUME = `王同学
 前端开发工程师
 上海 | 3 年经验 | wang@example.com | 138-0000-0000
 
@@ -295,76 +293,18 @@ const SAMPLE_RESUME = `王同学
 - 负责表单和表格开发
 - 优化部分页面性能`;
 
-const SAMPLE_JD = `岗位：前端开发工程师
+const LEGACY_SEEDED_JD = `岗位：前端开发工程师
 职责：
 1. 负责 Web 端业务页面、后台管理系统和复杂交互模块开发；
 2. 使用 React、TypeScript 完成组件化开发和前端工程化建设；
 3. 关注性能优化、代码质量、可维护性和跨团队协作；
 4. 有大型后台系统、数据看板、权限系统经验优先。`;
 
-const DEFAULT_RESULT: ResumeResult = {
-  optimizedContent: `王同学
-前端开发工程师
-上海 | 3 年经验 | wang@example.com | 138-0000-0000
-
-个人总结
-前端开发工程师，具备 React、TypeScript、组件化开发和前端工程化经验。熟悉复杂业务后台、数据看板和多角色权限场景，能够从业务目标出发完成页面架构、组件抽象、性能优化和跨团队交付。
-
-工作经历
-某科技公司 | 前端开发工程师 | 2023.07 - 至今
-- 负责管理端核心工作流重构，抽象表单、权限和数据表格组件，支持多业务线复用，减少重复开发成本。
-- 基于 React 和 TypeScript 完成复杂交互模块开发，优化状态管理和接口联调流程，提升页面交付稳定性。
-- 参与前端工程化治理，补充代码规范、组件文档和构建检查，降低多人协作中的维护成本。
-
-项目经历
-企业招聘管理后台重构
-- 针对旧系统页面重复、权限分散、表单维护成本高的问题，重构核心业务流程和通用组件层。
-- 沉淀动态表单、筛选表格、批量操作和角色权限组件，提升新增页面配置效率。
-- 优化首屏资源加载和列表渲染逻辑，改善大数据量场景下的交互流畅度。
-
-技能描述
-- 前端框架：熟悉 React、TypeScript、Hooks、组件抽象和复杂表单开发。
-- 工程化：具备构建配置、代码规范、组件文档和前端质量治理经验。
-- 性能优化：理解资源加载、列表渲染、缓存策略和交互性能优化方法。`,
-  keywords: ['React', 'TypeScript', '组件化', '性能优化', '前端工程化', '跨团队协作'],
-  improvements: ['项目经历改成结果表达', '补齐 JD 核心关键词', '强化工程化能力', '压缩低价值描述'],
-  matchScore: 82,
-};
-
 const EMPTY_RESULT: ResumeResult = {
   optimizedContent: '',
   keywords: [],
   improvements: [],
-  matchScore: 0,
-};
-
-const PRODUCT_MANAGER_RESULT: ResumeResult = {
-  optimizedContent: `王同学
-产品经理
-上海 | 3 年经验 | wang@example.com | 138-0000-0000
-
-个人总结
-具备 3 年 Web 业务与后台系统项目经验，熟悉招聘管理后台、权限配置、表单流程和数据展示等复杂业务场景。能够从用户路径、业务目标和交付效率出发拆解需求，协调研发、设计与后端推进功能落地，并结合数据反馈持续优化产品体验。过往前端开发经历使我理解技术实现边界，能够更高效地完成需求澄清、方案评审和跨团队沟通。
-
-工作经历
-某科技公司 | 前端开发工程师 / 产品协同负责人 | 2023.07 - 至今
-- 深度参与后台管理系统需求分析，与产品、后端共同梳理招聘流程、候选人管理、权限配置和数据展示等核心模块。
-- 基于用户操作路径和业务规则，推动表单、表格、筛选、批量操作等高频能力组件化，提升功能交付效率和一致性。
-- 在需求评审和接口联调阶段补充异常场景、权限边界和状态流转细节，减少返工并提升上线质量。
-
-项目经历
-企业招聘管理后台
-- 围绕候选人筛选、简历查看、岗位流转和权限分配等流程，梳理多角色使用场景和关键页面信息架构。
-- 将业务需求拆解为候选人列表、详情页、权限配置、数据看板等功能模块，协同研发完成版本交付。
-- 关注使用效率与操作反馈，优化筛选条件、表单校验和列表加载体验，改善业务人员日常操作效率。
-
-技能描述
-- 产品能力：需求理解、流程梳理、用户路径分析、功能拆解、PRD 协同、版本推进。
-- 协作能力：熟悉研发交付流程，能与产品、设计、后端和测试高效沟通。
-- 业务理解：熟悉后台系统、权限配置、招聘流程、数据展示和复杂表单场景。`,
-  keywords: ['需求分析', '用户路径', '跨团队协作', '后台系统', '权限配置', '数据驱动'],
-  improvements: ['自我介绍已转向产品经理表达', '突出需求理解和业务拆解能力', '保留技术背景作为协作优势', '弱化纯研发职责表述'],
-  matchScore: 86,
+  matchScore: Number.NaN,
 };
 
 const JD_KEYWORD_POOL = [
@@ -397,70 +337,6 @@ function parseJobTarget(content: string, source: JobTarget['source']): JobTarget
     source,
     content,
     keywords: keywords.length ? keywords : ['岗位匹配', '职责拆解', '表达优化'],
-  };
-}
-
-function createProjectDemoResult(jd: string): ResumeResult {
-  const target = parseJobTarget(jd, 'paste');
-  const keywords = target.keywords.slice(0, 6);
-  return {
-    ...DEFAULT_RESULT,
-    optimizedContent: DEFAULT_RESULT.optimizedContent.replace(
-      `企业招聘管理后台重构
-- 针对旧系统页面重复、权限分散、表单维护成本高的问题，重构核心业务流程和通用组件层。
-- 沉淀动态表单、筛选表格、批量操作和角色权限组件，提升新增页面配置效率。
-- 优化首屏资源加载和列表渲染逻辑，改善大数据量场景下的交互流畅度。`,
-      `企业招聘管理后台重构
-- 围绕${target.role} JD 中的${keywords.slice(0, 3).join('、') || '核心职责'}要求，重构候选人筛选、权限配置和数据表格等高频流程。
-- 抽象复杂表单、列表筛选、批量操作和角色权限组件，支持多业务线复用，减少重复开发和联调成本。
-- 结合接口状态管理、懒加载和列表渲染优化，改善大数据量场景下的页面响应速度和操作稳定性。`,
-    ),
-    keywords: target.keywords,
-    improvements: ['项目经验已按当前 JD 重写', '补入岗位关键词和业务场景', '突出个人动作、技术方案和交付结果', '弱化泛泛职责描述'],
-    matchScore: 88,
-  };
-}
-
-function createLocalOptimizationDemoResult(resume: string, jd: string, mode: OptimizeMode, instruction: string): ResumeResult {
-  const target = parseJobTarget(jd, 'paste');
-  const keywords = target.keywords.slice(0, 8);
-  const original = resume.trim() || SAMPLE_RESUME;
-  const keywordText = keywords.length ? keywords.join('、') : '岗位关键词、职责场景、交付结果';
-  const demoBlock = [
-    '',
-    '## 本地演示优化版本',
-    `> AI 上游暂时不可用，以下为基于规则生成的演示结果，用于验证“上传简历 -> JD 匹配 -> 生成版本 -> 对比记录”的主流程。`,
-    '',
-    '### 针对 JD 的优化重点',
-    `- 目标岗位：${target.role}`,
-    `- 匹配关键词：${keywordText}`,
-    `- 本次指令：${instruction}`,
-    '',
-    mode === 'project'
-      ? `### 项目经历优化示例\n- 围绕 ${target.role} 的筛选重点，将项目描述从“做了什么页面”调整为“解决了什么业务问题、采取了什么动作、产生了什么结果”。\n- 在项目条目中前置 ${keywordText} 等关键词，补充接口联调、组件复用、性能优化、权限/流程等可被招聘方识别的能力证据。\n- 每个项目建议按「业务场景 + 个人动作 + 技术方案 + 交付结果」重写，避免只罗列技术栈。`
-      : mode === 'experience'
-        ? `### 工作经历优化示例\n- 将日常职责改写为面向 ${target.role} 的交付证据，突出跨团队协作、需求拆解、上线质量和业务影响。\n- 把 ${keywordText} 等 JD 关键词自然放入职责与成果表达中，增强搜索匹配度。`
-        : mode === 'skills'
-          ? `### 技能描述优化示例\n- 技能栈按 ${target.role} 的优先级重排，先展示 JD 高相关能力，再展示辅助工具。\n- 每个核心技能补充使用场景，例如复杂表单、数据看板、权限控制、移动端适配或性能优化。`
-          : mode === 'intro'
-            ? `### 个人总结优化示例\n- 开场定位调整为 ${target.role} 候选人，突出与 JD 直接相关的 2-3 个优势。\n- 表达上减少泛泛形容词，改为“业务场景 + 能力证据 + 可迁移价值”。`
-            : `### 整体优化示例\n- 简历结构保持不变，优先强化个人总结、技能关键词、工作职责和项目成果。\n- 将 ${keywordText} 等 JD 关键词分布到摘要、技能、经历和项目中，提高匹配度。`,
-    '',
-    '---',
-    '',
-    original,
-  ].join('\n');
-
-  return {
-    optimizedContent: demoBlock,
-    keywords: keywords.length ? keywords : ['JD 匹配', '项目经历', '成果表达', '关键词优化'],
-    improvements: [
-      '已生成本地演示优化版本，主流程可继续预览和对比',
-      '已根据当前 JD 提取匹配关键词',
-      '已给出可落地的模块改写方向',
-      '真实 AI 恢复后会替换为模型生成版本',
-    ],
-    matchScore: Math.min(92, Math.max(78, 72 + keywords.length * 2)),
   };
 }
 
@@ -497,68 +373,12 @@ function buildIntroWorkflowContext(profile: IntroWorkflowState, command: string,
   return lines.join('\n');
 }
 
-function createIntroDemoResult(profile: IntroWorkflowState, command: string, jd: string): ResumeResult {
-  const guide = resolveIntroRole(profile, command, jd);
-  const tone = profile.tone || '结构清晰';
-  const optional = [
-    profile.mbti.trim() ? `${profile.mbti.trim()} 的沟通偏好` : '',
-    profile.zodiac.trim() ? `${profile.zodiac.trim()} 的表达特质` : '',
-    profile.highlights.trim(),
-  ].filter(Boolean).join('，');
-  const optionalSentence = optional ? `同时结合 ${optional}，让表达更贴近本人。` : '';
-
-  if (guide.label === '产品经理') {
-    return {
-      ...PRODUCT_MANAGER_RESULT,
-      optimizedContent: PRODUCT_MANAGER_RESULT.optimizedContent.replace(
-        '具备 3 年 Web 业务与后台系统项目经验，熟悉招聘管理后台、权限配置、表单流程和数据展示等复杂业务场景。能够从用户路径、业务目标和交付效率出发拆解需求，协调研发、设计与后端推进功能落地，并结合数据反馈持续优化产品体验。过往前端开发经历使我理解技术实现边界，能够更高效地完成需求澄清、方案评审和跨团队沟通。',
-        `我有 3 年 Web 业务与后台系统项目经验，熟悉招聘管理后台、权限配置、表单流程和数据展示等复杂业务场景。面向产品经理岗位，我会用${tone}的方式介绍自己：能从用户路径、业务目标和交付效率出发拆解需求，兼顾逻辑结构、体验审美和跨团队沟通，并借助技术背景更准确地判断方案边界、推进功能落地。${optionalSentence}`,
-      ),
-      improvements: ['自我介绍已按产品经理岗位重写', '强化逻辑、审美和沟通表达', '保留技术背景作为协作优势', '加入可选个性化信息'],
-    };
-  }
-
-  const introByRole: Record<string, string> = {
-    '销售/商务': `我有 3 年 Web 业务与后台系统项目经验，熟悉客户需求拆解、复杂流程协同和结果交付。面向销售/商务岗位，我会用${tone}的方式介绍自己：擅长从业务目标出发理解客户真实诉求，整合产品、技术和交付资源推进方案落地，在沟通中兼顾共情表达与结果转化。${optionalSentence}`,
-    '技术研发': `我是一名前端开发工程师，具备 3 年 React、TypeScript、组件化开发和前端工程化经验。面向技术研发岗位，我会用${tone}的方式介绍自己：重视代码严谨性、问题拆解、可维护性和稳定交付，能够在复杂后台、权限系统和数据展示场景中持续提升工程质量。${optionalSentence}`,
-    '运营/市场': `我有 3 年 Web 业务与后台系统项目经验，熟悉用户路径、数据展示和业务流程。面向运营/市场岗位，我会用${tone}的方式介绍自己：能够从用户感知和业务目标出发设计动作，结合数据复盘优化内容、活动和转化链路，并推动跨团队执行闭环。${optionalSentence}`,
-  };
-
-  return {
-    optimizedContent: `王同学
-${guide.label}
-上海 | 3 年经验 | wang@example.com | 138-0000-0000
-
-个人总结
-${introByRole[guide.label]}
-
-工作经历
-某科技公司 | 前端开发工程师 | 2023.07 - 至今
-- 负责后台管理系统页面开发，参与从需求理解、方案拆解到上线交付的完整流程。
-- 与产品、后端和业务方协作推进复杂表单、列表、权限配置和数据展示模块落地。
-- 关注体验反馈、性能稳定性和交付效率，持续优化业务人员的日常使用流程。
-
-项目经历
-企业招聘管理后台
-- 围绕候选人管理、简历查看、岗位流转和权限分配等核心流程完成模块建设。
-- 梳理多角色使用场景，沉淀可复用的表单、表格和筛选能力，提升后续需求交付效率。
-- 结合用户操作反馈优化页面性能和信息呈现，使业务流程更清晰、更易推进。
-
-技能描述
-- 沟通协作：能够在业务、产品、技术之间做清晰表达和需求对齐。
-- 业务理解：熟悉后台系统、招聘流程、权限配置、数据展示和复杂表单场景。
-- 交付能力：具备从问题拆解、方案实现到复盘优化的闭环推进经验。`,
-    keywords: guide.keywords,
-    improvements: [`自我介绍已按${guide.label}岗位重写`, `强化${guide.focus}`, '加入表达风格偏好', '保留原简历关键信息'],
-    matchScore: guide.label === '技术研发' ? 84 : 82,
-  };
-}
-
 function parseResume(content: string) {
   const lines = content.split('\n').map((line) => line.trim()).filter((line) => line && !isLikelyResumeNoiseLine(line));
-  const name = lines[0] || '王同学';
-  const role = lines[1] || '前端开发工程师';
-  const contact = lines.find((line) => line.includes('@')) || '上海 | 3 年经验 | wang@example.com';
+  const header = lines.slice(0, 6);
+  const name = header.find((line) => /^(?:姓名|Name)[:：]/i.test(line))?.replace(/^(?:姓名|Name)[:：]\s*/i, '') || '';
+  const role = header.find((line) => /^(?:求职意向|目标岗位|应聘岗位|职位|岗位)[:：]/.test(line))?.replace(/^[^:：]+[:：]\s*/, '') || '';
+  const contact = header.filter((line) => /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|1[3-9]\d{9}/i.test(line)).join(' | ');
   const sections = content.split(/\n(?=(个人总结|工作经历|项目经历|技能描述)\n)/g);
 
   return { name, role, contact, sections };
@@ -566,7 +386,7 @@ function parseResume(content: string) {
 
 function buildResumeDocName(result: ResumeResult) {
   const parsed = parseResume(result.optimizedContent);
-  return `${parsed.name}_${parsed.role}_优化简历.md`;
+  return `${[parsed.name, parsed.role, '优化简历'].filter(Boolean).join('_')}.md`;
 }
 
 function getModeLabel(mode: OptimizeMode) {
@@ -747,16 +567,16 @@ function createDefaultSession(messages: ChatMessage[] = []): ChatSession {
   const now = new Date().toISOString();
   return {
     id: createSessionId(),
-    title: '前端开发工程师简历优化',
+    title: '新的简历对话',
     createdAt: now,
     updatedAt: now,
     messages,
-    resumeContent: SAMPLE_RESUME,
-    result: DEFAULT_RESULT,
-    command: DEFAULT_COMMAND,
+    resumeContent: '',
+    result: EMPTY_RESULT,
+    command: '',
     activeMode: 'full',
     uploadedFile: null,
-    jobRequirements: SAMPLE_JD,
+    jobRequirements: '',
     model: DEFAULT_WORKSPACE_MODEL,
   };
 }
@@ -801,7 +621,7 @@ function isResumeResult(value: unknown): value is ResumeResult {
   return typeof result?.optimizedContent === 'string'
     && Array.isArray(result.keywords)
     && Array.isArray(result.improvements)
-    && typeof result.matchScore === 'number';
+    && (typeof result.matchScore === 'number' || result.matchScore === null);
 }
 
 function isChatSession(value: unknown): value is ChatSession {
@@ -816,14 +636,8 @@ function isChatSession(value: unknown): value is ChatSession {
 }
 
 function shouldResetSeededBlankSession(session: ChatSession) {
-  return session.title === '新的简历对话'
-    && session.messages.length === 0
-    && !session.uploadedFile
-    && (
-      session.resumeContent.trim() === SAMPLE_RESUME.trim()
-      || session.result.optimizedContent.trim() === DEFAULT_RESULT.optimizedContent.trim()
-      || session.command === DEFAULT_COMMAND
-    );
+  return !session.uploadedFile && session.messages.length === 0
+    && session.resumeContent.trim() === LEGACY_SEEDED_RESUME.trim();
 }
 
 function readChatWorkspace(): ChatWorkspace {
@@ -842,18 +656,19 @@ function readChatWorkspace(): ChatWorkspace {
               command: '',
               activeMode: 'full' as const,
               uploadedFile: null,
-              jobRequirements: '',
-              model: DEFAULT_WORKSPACE_MODEL,
+              jobRequirements: session.jobRequirements?.trim() === LEGACY_SEEDED_JD.trim() ? '' : session.jobRequirements ?? '',
+              model: session.model ?? DEFAULT_WORKSPACE_MODEL,
             };
           }
-          const prepared = prepareUploadedResumeContent(session.resumeContent, session.uploadedFile?.name || '');
+          const legacyPlaceholder = session.resumeContent.includes('PDF 文本层读取不完整，优化时会通过页面图像进行 OCR 识别。');
+          const content = legacyPlaceholder ? '' : cleanExtractedResumeText(session.resumeContent);
           const resultContent = cleanExtractedResumeText(session.result.optimizedContent);
-          const shouldCleanResult = !hasEnoughReadableResumeText(resultContent) && session.uploadedFile;
+          const shouldCleanResult = Boolean(session.uploadedFile) && (legacyPlaceholder || !hasEnoughReadableResumeText(resultContent) || session.result.improvements.includes('已读取上传简历') || session.result.matchScore === 68 && session.result.keywords.includes('待匹配 JD'));
           return {
             ...session,
-            resumeContent: prepared.content,
-            result: shouldCleanResult ? buildUploadedResumeResult(prepared.content, prepared.usedFallback) : session.result,
-            jobRequirements: session.jobRequirements ?? SAMPLE_JD,
+            resumeContent: content,
+            result: shouldCleanResult ? buildUploadedResumeResult(content) : { ...session.result, matchScore: session.result.matchScore ?? Number.NaN },
+            jobRequirements: session.jobRequirements?.trim() === LEGACY_SEEDED_JD.trim() ? '' : session.jobRequirements ?? '',
             model: session.model ?? DEFAULT_WORKSPACE_MODEL,
           };
         });
@@ -906,27 +721,6 @@ function writeLocalOptimizationRecord(record: OptimizationRecord) {
   }
 }
 
-function buildOptimizationRecordContent(record: OptimizationRecord) {
-  if (record.optimizedContent) return record.optimizedContent;
-
-  return `${record.company}候选人
-${record.position}
-目标行业：${record.industry || '求职方向'} | JD 匹配度：${record.matchScore}%
-
-个人总结
-围绕 ${record.position} 岗位要求，已强化 ${record.keywords.slice(0, 4).join('、') || '岗位关键词'} 等核心表达，并将经历描述调整为更适合投递的结果导向版本。
-
-项目经历
-- 突出和 ${record.position} 相关的关键项目，补充问题背景、个人职责、解决方案和可量化结果。
-- 保留高价值技术关键词，减少低匹配度信息对简历版面的占用。
-
-技能描述
-${record.keywords.map((keyword) => `- ${keyword}：已结合岗位要求融入简历表达。`).join('\n')}
-
-优化说明
-${record.improvements.map((item) => `- ${item}`).join('\n')}`;
-}
-
 function buildRecordFromResult(input: {
   result: ResumeResult;
   jobTarget: JobTarget;
@@ -957,10 +751,6 @@ function formatFileSize(bytes: number) {
 
 function getFileExtension(fileName: string) {
   return `.${fileName.split('.').pop()?.toLowerCase() || ''}`;
-}
-
-function stripFileExtension(fileName: string) {
-  return fileName.replace(/\.[^.]+$/, '');
 }
 
 function normalizeExtractedText(text: string) {
@@ -1000,42 +790,7 @@ function hasEnoughReadableResumeText(text: string) {
   const compact = text.replace(/\s/g, '');
   const cjk = (compact.match(/[\u4e00-\u9fa5]/g) || []).length;
   const meaningfulWords = (text.match(/[A-Za-z]{2,}|[\u4e00-\u9fa5]{2,}/g) || []).length;
-  return text.length >= 40 && (cjk >= 12 || meaningfulWords >= 8);
-}
-
-function deriveResumeFallbackFromFileName(fileName: string, rawText = '') {
-  const baseName = stripFileExtension(fileName).replace(/[《》]/g, '').trim();
-  const bracketRole = baseName.match(/[【[]([^】\]]+)[】\]]/)?.[1] || '';
-  const role = (bracketRole.split(/[_\s|｜-]+/).find(Boolean) || '目标岗位').trim();
-  const afterBracket = baseName.replace(/^[【[][^】\]]+[】\]]\s*/, '').trim();
-  const name = (afterBracket.match(/[\u4e00-\u9fa5]{2,4}/)?.[0] || baseName.match(/[\u4e00-\u9fa5]{2,4}/)?.[0] || '候选人').trim();
-  const phone = rawText.match(/1[3-9]\d{9}/)?.[0] || '';
-  const email = rawText.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || '';
-  const contact = [phone ? `电话：${phone}` : '', email ? `邮箱：${email}` : ''].filter(Boolean).join(' | ') || '联系方式待补充';
-
-  return `${name}
-${role}
-${contact}
-
-个人总结
-PDF 文本层读取不完整，优化时会通过页面图像进行 OCR 识别。也可以上传 DOCX / TXT 简历后继续优化。
-
-项目经历
-- 待补充原始项目背景、个人职责、技术方案和业务结果。
-
-技能描述
-- 待从原始简历中提取技能关键词。`;
-}
-
-function prepareUploadedResumeContent(rawText: string, fileName: string) {
-  const cleaned = cleanExtractedResumeText(rawText);
-  if (hasEnoughReadableResumeText(cleaned)) {
-    return { content: cleaned, usedFallback: false };
-  }
-  return {
-    content: deriveResumeFallbackFromFileName(fileName, rawText),
-    usedFallback: true,
-  };
+  return hasReadableResumeText(text) && (cjk >= 12 || meaningfulWords >= 8);
 }
 
 function getUploadIcon(type: string) {
@@ -1044,38 +799,8 @@ function getUploadIcon(type: string) {
   return 'ri-file-text-line';
 }
 
-function buildUploadedResumeResult(content: string, usedFallback = false): ResumeResult {
-  const parsed = parseResume(content);
-  return {
-    optimizedContent: content,
-    keywords: ['待匹配 JD', parsed.role, '原始简历已读取'].filter(Boolean).slice(0, 6),
-    improvements: usedFallback
-      ? ['PDF 文本层不可读，优化时会通过页面图像进行 OCR 识别', '建议上传 DOCX / TXT 或粘贴简历文本', '识别完成后将基于完整简历和 JD 优化表达']
-      : ['已读取上传简历', '可继续输入目标岗位或 JD', '发送后将基于当前简历生成优化版本'],
-    matchScore: 68,
-  };
-}
-
-async function readTextFile(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(new Error('文件读取失败，请重试'));
-    reader.readAsText(file, 'utf-8');
-  });
-}
-
-async function extractResumeText(file: File) {
-  try {
-    const ext = getFileExtension(file.name);
-    if (['.txt', '.md', '.markdown', '.csv', '.json'].includes(ext)) return normalizeExtractedText(await readTextFile(file));
-    if (ext === '.pdf' || file.type.includes('pdf')) return await extractPdfText(file);
-    if (ext === '.docx' || file.type.includes('wordprocessingml')) return await extractDocxText(file);
-    if (ext === '.doc') throw new Error('暂不支持旧版 .doc，请另存为 .docx 后上传');
-    throw new Error('不支持该文件格式，请上传 PDF、DOCX、TXT 或 MD');
-  } catch (err) {
-    throw err instanceof Error ? err : new Error('简历读取失败，请重试');
-  }
+function buildUploadedResumeResult(content: string): ResumeResult {
+  return { ...EMPTY_RESULT, optimizedContent: content };
 }
 
 function deriveSessionTitle(resumeContent: string, messages: ChatMessage[], fallback: string) {
@@ -1158,7 +883,7 @@ function ResumePreview({
         </div>
       </div>
       <div className={`mb-7 text-sm font-bold ${mutedClass}`}>
-        JD 匹配分 {result.matchScore} | 关键词覆盖 71% | 模板：ATS 友好版
+        {Number.isFinite(result.matchScore) ? `JD 匹配分 ${result.matchScore} | ` : ''}模板：ATS 友好版
       </div>
       <div className="space-y-6">
         {result.optimizedContent
@@ -1277,10 +1002,10 @@ function ResumeThumbnail({
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
           <span className="rounded-full bg-indigo-50 px-3 py-1.5 text-xs font-black text-indigo-600">
             <i className="ri-key-2-line mr-1" />
-            JD 关键词已匹配
+            {result.keywords.length ? 'JD 关键词' : '原始简历'}
           </span>
           <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-black text-emerald-700">
-            匹配分 {result.matchScore}
+            {Number.isFinite(result.matchScore) ? `匹配分 ${result.matchScore}` : '尚未评估'}
           </span>
         </div>
       </div>
@@ -1347,7 +1072,7 @@ function ResumeVersionMessageCard({
         </div>
         <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
           <div className="text-xs font-black text-slate-400">JD 匹配分</div>
-          <div className="mt-1 text-3xl font-black text-indigo-600">{payload.result.matchScore}</div>
+          <div className="mt-1 text-3xl font-black text-indigo-600">{Number.isFinite(payload.result.matchScore) ? payload.result.matchScore : '尚未评估'}</div>
           <div className="mt-3 line-clamp-3 text-xs font-bold leading-5 text-slate-500">
             {payload.result.improvements.slice(0, 2).join('；')}
           </div>
@@ -1372,35 +1097,9 @@ function ResumeVersionMessageCard({
   );
 }
 
-function buildDimensionScores(result: ResumeResult) {
-  const base = Math.max(55, Math.min(96, result.matchScore));
-  return [
-    { label: 'JD 关键词覆盖', score: Math.min(98, base + 6), icon: 'ri-key-2-line' },
-    { label: '经历证据强度', score: Math.max(50, base - 3), icon: 'ri-stack-line' },
-    { label: '表达清晰度', score: Math.min(96, base + 2), icon: 'ri-text' },
-    { label: 'ATS 友好度', score: Math.min(94, base + 1), icon: 'ri-search-eye-line' },
-  ];
-}
-
 function ResumeScorePanel({ result }: { result: ResumeResult }) {
-  return (
-    <div className="grid gap-3 sm:grid-cols-2">
-      {buildDimensionScores(result).map((item) => (
-        <div key={item.label} className="rounded-2xl border border-slate-200 bg-white p-3">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-2 text-xs font-black text-slate-600">
-              <i className={`${item.icon} text-indigo-500`} />
-              <span className="truncate">{item.label}</span>
-            </div>
-            <span className="text-sm font-black text-slate-950">{item.score}</span>
-          </div>
-          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100">
-            <div className="h-full rounded-full bg-indigo-600" style={{ width: `${item.score}%` }} />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
+  if (!Number.isFinite(result.matchScore)) return null;
+  return <div className="rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold text-slate-600">JD 匹配分：{result.matchScore}</div>;
 }
 
 function buildLineDiff(originalContent: string, optimizedContent: string) {
@@ -2076,8 +1775,8 @@ export default function HomePage() {
   const [resumePreviewMode, setResumePreviewMode] = useState<ResumePreviewMode>('optimized');
   const [selectedModel, setSelectedModel] = useState<WorkspaceModel>(initialSession.model ?? DEFAULT_WORKSPACE_MODEL);
   const [resumeContent, setResumeContent] = useState(initialSession.resumeContent);
-  const [jobRequirements, setJobRequirements] = useState(initialSession.jobRequirements ?? SAMPLE_JD);
-  const [draftJobRequirements, setDraftJobRequirements] = useState(initialSession.jobRequirements ?? SAMPLE_JD);
+  const [jobRequirements, setJobRequirements] = useState(initialSession.jobRequirements ?? '');
+  const [draftJobRequirements, setDraftJobRequirements] = useState(initialSession.jobRequirements ?? '');
   const [command, setCommand] = useState(initialSession.command);
   const [result, setResult] = useState<ResumeResult>(initialSession.result);
   const [messages, setMessages] = useState<ChatMessage[]>(initialSession.messages);
@@ -2102,14 +1801,15 @@ export default function HomePage() {
   const [uploadingResume, setUploadingResume] = useState(false);
   const [resumePageImages, setResumePageImages] = useState<string[]>([]);
   const [toast, setToast] = useState('');
-  const [aiConsent, setAiConsent] = useState(true);
+  const [aiConsent, setAiConsent] = useState(false);
+  const operationPendingRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const user = getStoredUser();
   const isDesktop = useIsDesktop();
   const isPreviewDocked = useIsPreviewDocked();
   const currentResume = useMemo(() => parseResume(result.optimizedContent), [result.optimizedContent]);
   const resumeModules = useMemo(() => detectResumeModules(result.optimizedContent || resumeContent), [result.optimizedContent, resumeContent]);
-  const jobTarget = useMemo(() => parseJobTarget(jobRequirements, jobRequirements === SAMPLE_JD ? 'sample' : 'paste'), [jobRequirements]);
+  const jobTarget = useMemo(() => parseJobTarget(jobRequirements, 'paste'), [jobRequirements]);
   const hasConversationContent = Boolean(resumeContent.trim() || result.optimizedContent.trim() || messages.length || jobRequirements.trim());
   const hasResumePreview = Boolean(result.optimizedContent.trim());
   const currentDocName = hasResumePreview ? buildResumeDocName(result) : '待生成简历.md';
@@ -2120,7 +1820,7 @@ export default function HomePage() {
   const currentOriginalContent = activeVersionPayload?.originalContent || resumeContent;
   const resumeVersionCount = useMemo(() => getResumeVersionMessages(messages).length, [messages]);
   const currentModelOption = WORKSPACE_MODELS.find((model) => model.id === selectedModel) || WORKSPACE_MODELS[0];
-  const pageTitle = hasResumePreview ? `${currentResume.role}简历优化` : '新的简历对话';
+  const pageTitle = hasResumePreview ? `${currentResume.role || ''}简历优化` : '新的简历对话';
   const activeSession = sessions.find((session) => session.id === activeSessionId);
   const sortedSessions = useMemo(
     () => [...sessions].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()),
@@ -2208,6 +1908,9 @@ export default function HomePage() {
   };
 
   const openResumeVersion = (payload: ResumeVersionPayload) => {
+    if (operationPendingRef.current) { showToast('请等待当前操作完成'); return; }
+    setResumePageImages([]);
+    setResumeContent(payload.originalContent || payload.result.optimizedContent);
     setResult(payload.result);
     setActiveResumeVersion(payload.version);
     setResumePreviewMode('optimized');
@@ -2217,8 +1920,10 @@ export default function HomePage() {
   };
 
   const openSession = (sessionId: string) => {
+    if (operationPendingRef.current) { showToast('请等待当前操作完成'); return; }
     const session = sessions.find((item) => item.id === sessionId);
     if (!session || session.id === activeSessionId) return;
+    setResumePageImages([]);
     setActiveSessionId(session.id);
     setMessages(session.messages);
     setActiveResumeVersion(getLatestResumeVersion(session.messages));
@@ -2229,8 +1934,8 @@ export default function HomePage() {
     setActiveModuleKey(session.activeMode);
     setSelectedModel(session.model ?? DEFAULT_WORKSPACE_MODEL);
     setUploadedFile(session.uploadedFile);
-    setJobRequirements(session.jobRequirements ?? SAMPLE_JD);
-    setDraftJobRequirements(session.jobRequirements ?? SAMPLE_JD);
+    setJobRequirements(session.jobRequirements ?? '');
+    setDraftJobRequirements(session.jobRequirements ?? '');
     setDrawerOpen(false);
     setShowJobPanel(false);
     setHistoryTab('chat');
@@ -2238,7 +1943,12 @@ export default function HomePage() {
   };
 
   const openOptimizationRecord = (record: OptimizationRecord) => {
-    const content = buildOptimizationRecordContent(record);
+    if (operationPendingRef.current) { showToast('请等待当前操作完成'); return; }
+    const content = record.optimizedContent?.trim();
+    if (!content) { showToast('该记录未保存简历正文，暂时无法预览'); return; }
+    setResumePageImages([]);
+    setResumeContent(content);
+    setUploadedFile(null);
     setResult({
       optimizedContent: content,
       keywords: record.keywords,
@@ -2260,8 +1970,10 @@ export default function HomePage() {
   };
 
   const startNewSession = () => {
+    if (operationPendingRef.current) { showToast('请等待当前操作完成'); return; }
     const session = createBlankSession();
     setSessions((current) => [session, ...current]);
+    setResumePageImages([]);
     setActiveSessionId(session.id);
     setMessages([]);
     setActiveResumeVersion(0);
@@ -2272,7 +1984,6 @@ export default function HomePage() {
     setActiveModuleKey(session.activeMode);
     setSelectedModel(session.model ?? DEFAULT_WORKSPACE_MODEL);
     setUploadedFile(null);
-    setResumePageImages([]);
     setJobRequirements(session.jobRequirements);
     setDraftJobRequirements(session.jobRequirements);
     setDrawerOpen(false);
@@ -2282,44 +1993,23 @@ export default function HomePage() {
   };
 
   const clearCurrentMessages = () => {
+    if (operationPendingRef.current) { showToast('请等待当前操作完成'); return; }
     setMessages([]);
     showToast('当前对话记录已清空');
   };
 
   const handleResumeFile = async (file: File) => {
-    if (file.size > 5 * 1024 * 1024) {
-      showToast('文件超过 5MB，请压缩后再上传');
-      return;
-    }
-
+    if (operationPendingRef.current) { showToast('请等待当前操作完成'); return; }
+    operationPendingRef.current = true;
     setUploadingResume(true);
     setStatusText('正在读取上传的简历文件');
     try {
-      const rawContent = (await extractResumeText(file)).trim();
-      const { content, usedFallback } = prepareUploadedResumeContent(rawContent, file.name);
-      
-      let pageImages: string[] = [];
-      const ext = getFileExtension(file.name);
-      const isPdf = ext === '.pdf' || file.type.includes('pdf');
-      // If PDF text extraction is incomplete or fallback triggered, automatically rasterize pages for OCR
-      if (isPdf && (usedFallback || content.length < 300)) {
-        setStatusText('正在解析 PDF 页面图像...');
-        try {
-          pageImages = await extractPdfPageImages(file, 5);
-        } catch {
-          // ignore page image errors
-        }
-      }
-      setResumePageImages(pageImages);
-
-      if (content.length < 20 && pageImages.length === 0) {
-        showToast('简历内容太短，请检查文件');
-        return;
-      }
+      const parsed = await readResumeFile(file, { onStatus: setStatusText });
+      setResumePageImages(parsed.pageImages);
       const fileMeta = { name: file.name, size: file.size, type: file.type || getFileExtension(file.name) };
       setUploadedFile(fileMeta);
-      setResumeContent(content);
-      setResult(buildUploadedResumeResult(content, usedFallback));
+      setResumeContent(parsed.content);
+      setResult(buildUploadedResumeResult(parsed.content));
       setActiveResumeVersion(0);
       setCommand('基于当前 JD 优化项目经验，突出职责、动作、技术难点和结果');
       setActiveMode('project');
@@ -2327,16 +2017,19 @@ export default function HomePage() {
       setShowJobPanel(true);
       addMessage({
         role: 'assistant',
-        content: usedFallback
-          ? (pageImages.length > 0
-              ? `已读取简历《${file.name}》，检测到文本层包含特殊编码，已提取页面图像供 AI 视觉完整识别。`
-              : `已读取简历《${file.name}》，PDF 文本层不可读，优化时会通过页面图像进行 OCR 识别。也可以上传 DOCX / TXT 或粘贴简历文本。`)
+        content: parsed.requiresOcr
+          ? `已加载《${file.name}》的全部 ${parsed.pageCount} 页。检测到扫描件或复杂版式，提交优化后将先进行视觉识别。`
           : `已读取简历《${file.name}》，你可以继续输入目标岗位、JD 或优化要求。`,
       });
-      showToast(usedFallback && pageImages.length > 0 ? '已加载图像，优化时将进行 OCR 识别' : usedFallback ? '暂未读到可识别文本，请补充简历文字' : '简历已上传并读取');
+      showToast(parsed.requiresOcr ? '已加载全部页面，优化时将进行视觉识别' : '简历已上传并读取');
     } catch (error) {
+      setResumePageImages([]);
+      setUploadedFile(null);
+      setResumeContent('');
+      setResult(EMPTY_RESULT);
       showToast(error instanceof Error ? error.message : '文件读取失败，请重试');
     } finally {
+      operationPendingRef.current = false;
       setUploadingResume(false);
       setStatusText('');
     }
@@ -2344,18 +2037,27 @@ export default function HomePage() {
 
   const runOptimization = async (mode = activeMode, instruction = command, moduleKey: string = activeModuleKey) => {
     const trimmedInstruction = instruction.trim();
-    if (!trimmedInstruction || loading) return;
+    if (!trimmedInstruction || operationPendingRef.current) return;
 
     addMessage({ role: 'user', content: trimmedInstruction });
     if (isAssistantIntroRequest(trimmedInstruction)) {
       addMessage({
         role: 'assistant',
-        content: '我是职引简历，主要帮你围绕目标 JD 优化简历、自我介绍、项目经历、技能描述和面试复盘。你可以先上传简历或粘贴 JD，也可以直接选择下方模块开始演示。',
+        content: '我是职引简历，主要帮你围绕目标 JD 优化简历、自我介绍、项目经历、技能描述和面试复盘。你可以先上传简历或粘贴 JD，也可以选择下方模块设置优化方向。',
       });
       showToast('已回复当前问题');
       return;
     }
 
+    if (!user) { showToast('请先登录后再优化简历'); return; }
+    if (!aiConsent) { showToast('请先同意将简历和 JD 发送给 AI 服务'); return; }
+    if ((!hasEnoughReadableResumeText(resumeContent) || resumeContent.trim() === LEGACY_SEEDED_RESUME.trim()) && resumePageImages.length === 0) {
+      showToast('请先上传可识别的简历，扫描 PDF 请重新上传'); return;
+    }
+    if (jobRequirements.trim().length < 20 || jobRequirements.trim() === LEGACY_SEEDED_JD.trim()) {
+      showToast('请先填写完整的真实岗位 JD（至少 20 字）'); return;
+    }
+    operationPendingRef.current = true;
     const nextMode = inferModeFromCommand(trimmedInstruction, mode);
     const isProductManagerRequest = hasProductManagerIntent(trimmedInstruction);
     const shouldUseIntroWorkflow = isIntroRequest(nextMode, trimmedInstruction);
@@ -2371,40 +2073,10 @@ export default function HomePage() {
     setOptimizationStageIndex(0);
     setLoading(true);
     setStatusText(resumePageImages.length > 0 ? '正在识别简历图像并结合 JD 进行智能优化，预计需要 15-30 秒' : (shouldUseIntroWorkflow ? '正在结合岗位身份生成定向自我介绍' : '正在结合 JD 和你的指令优化右侧简历，预计需要 10-30 秒'));
-    const baseResumeContent = resumeContent.trim() || result.optimizedContent.trim() || SAMPLE_RESUME;
+    const baseResumeContent = resumeContent.trim();
     try {
-      if (!user) {
-        await new Promise((resolve) => window.setTimeout(resolve, 900));
-        const demoResult = shouldUseIntroWorkflow
-          ? createIntroDemoResult(introWorkflow, trimmedInstruction, jobRequirements)
-          : isProductManagerRequest
-            ? PRODUCT_MANAGER_RESULT
-            : nextMode === 'project'
-              ? createProjectDemoResult(jobRequirements)
-              : DEFAULT_RESULT;
-        setResult(demoResult);
-        rememberOptimizationRecord(buildRecordFromResult({
-          result: demoResult,
-          jobTarget,
-          mode: nextMode,
-          optimizedContent: demoResult.optimizedContent,
-        }));
-        addResumeVersionMessage(
-          demoResult,
-          nextMode,
-          shouldUseIntroWorkflow && activeIntroGuide
-            ? `已按${activeIntroGuide.label}岗位生成自我介绍版本`
-            : isProductManagerRequest
-              ? '已生成产品经理方向简历版本'
-              : '已生成新的优化简历版本',
-          baseResumeContent,
-        );
-        showToast('已生成示例优化结果，登录后可保存真实记录');
-        return;
-      }
-
       const apiResumeContent = baseResumeContent;
-      const apiJobRequirements = jobRequirements.trim() || SAMPLE_JD;
+      const apiJobRequirements = jobRequirements.trim();
 
       const next = await createResumeOptimization({
         resumeContent: apiResumeContent,
@@ -2416,7 +2088,7 @@ ${trimmedInstruction}`,
         model: selectedModel,
         keywordMatch: true,
         resumePageImages: resumePageImages.length > 0 ? resumePageImages : undefined,
-        aiConsent: true,
+        aiConsent,
       });
       const nextResult = {
         optimizedContent: next.optimizedContent,
@@ -2426,8 +2098,9 @@ ${trimmedInstruction}`,
       };
       const finalResult = nextResult;
       setResult(finalResult);
-      if (next.originalContent && next.originalContent.length > 20) {
+      if (next.originalContent?.trim()) {
         setResumeContent(next.originalContent);
+        setResumePageImages([]);
       }
       rememberOptimizationRecord(buildRecordFromResult({
         result: finalResult,
@@ -2448,14 +2121,13 @@ ${trimmedInstruction}`,
       showToast('已按你的指令更新右侧简历');
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : '优化失败，请稍后再试';
-      const fallbackResult = createLocalOptimizationDemoResult(baseResumeContent, jobRequirements, nextMode, trimmedInstruction);
       addMessage({
         role: 'assistant',
-        content: `AI 生成暂时失败：${errorMessage}\n\n本次未生成正式优化稿，也未扣除额度。下面仅显示优化建议预览，不能作为投递版本。`,
+        content: `AI 生成暂时失败：${errorMessage}\n\n本次未生成优化稿，已保留之前的简历内容。`,
       });
-      setResult({ ...fallbackResult, optimizedContent: baseResumeContent });
-      showToast('AI 暂不可用，本次未扣除额度');
+      showToast('优化失败，已保留之前的简历');
     } finally {
+      operationPendingRef.current = false;
       setLoading(false);
       setStatusText('');
     }
@@ -2477,6 +2149,7 @@ ${trimmedInstruction}`,
   };
 
   const applyDraftJob = () => {
+    if (operationPendingRef.current) { showToast('请等待当前操作完成'); return; }
     const next = draftJobRequirements.trim();
     if (next.length < 20) {
       setJobError('JD 内容太短，请补充岗位职责或任职要求');
@@ -2494,11 +2167,13 @@ ${trimmedInstruction}`,
   };
 
   const readBossJob = async (url: string) => {
+    if (operationPendingRef.current) { showToast('请等待当前操作完成'); return; }
     const trimmedUrl = url.trim();
     if (!/zhipin|boss|kanzhun/i.test(trimmedUrl)) {
       setJobError('请粘贴 BOSS 直聘岗位链接');
       return;
     }
+    operationPendingRef.current = true;
     setReadingBossJob(true);
     setJobError('');
     setStatusText('正在读取 BOSS 直聘岗位 JD');
@@ -2517,6 +2192,7 @@ ${trimmedInstruction}`,
       setJobError(message);
       addMessage({ role: 'assistant', content: `岗位链接读取失败：${message}` });
     } finally {
+      operationPendingRef.current = false;
       setReadingBossJob(false);
       setStatusText('');
     }
@@ -2597,20 +2273,16 @@ ${trimmedInstruction}`,
                     onBossRead={readBossJob}
                     onUploadClick={() => fileInputRef.current?.click()}
                   />
-                ) : messages.length > 0 && (
-                  <div className="ml-auto max-w-2xl rounded-xl bg-white px-5 py-4 text-[15px] leading-7 shadow-sm">
-                    {messages.find((message) => message.role === 'user')?.content || messages[0]?.content}
-                  </div>
-                )}
+                ) : null}
 
-                <div className={isNewConversationStart ? 'mt-6' : 'mt-8'}>
+                <div className={isNewConversationStart ? 'mt-6' : 'mt-2'}>
                   <div className="mb-4 flex items-center gap-2 font-black">
                     <span className="grid h-7 w-7 place-items-center rounded-full bg-indigo-50 text-indigo-600"><i className="ri-user-smile-line" /></span>
                     职引简历
                     <span className="rounded-full border border-slate-200 bg-white px-2 py-1 text-xs font-bold text-slate-500">JD 定向优化</span>
                   </div>
                   <div className="space-y-4 text-[15px] leading-8 text-slate-700">
-                    <p>{isNewConversationStart ? '先填入职位，再上传或读取简历；进入对话后职位信息会自动折叠为上下文卡片。' : '围绕当前职位上下文，继续生成新的简历优化版本。'}</p>
+                    {isNewConversationStart && <p>先填入职位，再上传或读取简历；进入对话后职位信息会自动折叠为上下文卡片。</p>}
                     {!hasConversationContent && !isNewConversationStart && (
                       <div className="rounded-3xl border border-dashed border-indigo-200 bg-white p-5 text-sm leading-7 text-slate-600">
                         上传简历、粘贴 JD，或直接输入你想优化的岗位方向。新对话会从空白状态开始记录。
@@ -2649,20 +2321,13 @@ ${trimmedInstruction}`,
                         onEdit={() => setShowJobPanel(true)}
                       />
                     )}
-                    {result.improvements.length > 0 && (
-                      <>
-                        <p className="text-sm font-bold text-slate-400">生成优化建议 <i className="ri-arrow-down-s-line" /></p>
-                        <ul className="list-disc space-y-2 pl-5">
-                          {result.improvements.map((item) => <li key={item}>{item}</li>)}
-                        </ul>
-                      </>
-                    )}
+
                   </div>
 
                   <JobTargetPanel
                     open={showJobPanel && !isNewConversationStart}
                     value={draftJobRequirements}
-                    target={parseJobTarget(draftJobRequirements || jobRequirements, draftJobRequirements === SAMPLE_JD ? 'sample' : 'paste')}
+                    target={parseJobTarget(draftJobRequirements || jobRequirements, 'paste')}
                     loading={readingBossJob}
                     error={jobError}
                     modules={(resumeContent.trim() || hasResumePreview) ? resumeModules : []}
@@ -2684,67 +2349,42 @@ ${trimmedInstruction}`,
                     />
                   )}
 
-                  {hasResumePreview && (
-                    <ResumeThumbnail
-                      result={result}
-                      docName={currentDocName}
-                      onOpen={() => setDrawerOpen(true)}
-                    />
-                  )}
-
-                  {hasResumePreview && (
-                    <p className="mt-5 text-[15px] leading-8 text-slate-700">优化后的简历已经生成。你可以继续选择任一简历模块单独调整，我会保持当前 JD 关键词匹配。</p>
-                  )}
-
-                  <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-                    <div className="mb-3 flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-2 text-sm font-bold text-slate-900">
-                        当前对话
-                        {resumeVersionCount > 0 && (
-                          <span className="rounded-full bg-white px-2 py-1 text-[11px] font-black text-indigo-600">
-                            {resumeVersionCount} 个优化版本
-                          </span>
+                  <div role="log" aria-label="简历优化对话" className="mt-7 space-y-8">
+                    {messages.map((msg) => (
+                      <article key={msg.id} className={msg.role === 'user' ? 'ml-auto max-w-[90%]' : 'w-full'}>
+                        <div className={`mb-2 flex items-center gap-2 text-xs text-slate-400 ${msg.role === 'user' ? 'justify-end' : ''}`}>
+                          <span className="font-bold">{msg.role === 'user' ? '你' : '职引简历'}</span>
+                          <span>{msg.time}</span>
+                        </div>
+                        {msg.type === 'resume_version' ? (
+                          <ResumeVersionMessageCard message={msg} onOpen={openResumeVersion} />
+                        ) : (
+                          <div className={`whitespace-pre-wrap text-[15px] leading-8 ${msg.role === 'user' ? 'rounded-2xl bg-slate-100 px-5 py-3 text-slate-800' : 'text-slate-700'}`}>
+                            {msg.content}
+                          </div>
+                        )}
+                      </article>
+                    ))}
+                    {(loading || statusText) && (
+                      <div role="status" className="max-w-xl">
+                        <div className="mb-2 text-xs font-bold text-indigo-600">职引简历 · 正在处理</div>
+                        {loading ? (
+                          <OptimizationThinking flow={optimizationFlow} activeIndex={optimizationStageIndex} statusText={statusText} />
+                        ) : (
+                          <p className="text-sm text-slate-500">{statusText}</p>
                         )}
                       </div>
-                      <button
-                        type="button"
-                        onClick={clearCurrentMessages}
-                        className="text-xs text-slate-500 hover:text-slate-700"
-                      >
-                        清空
-                      </button>
-                    </div>
-                    {messages.length === 0 ? (
-                      <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-slate-500">
-                        你每次发送的优化指令都会保留在这里，方便你回看历史交互。
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        {messages.map((msg) => (
-                          <div
-                            key={msg.id}
-                            className={`rounded-3xl p-4 ${
-                              msg.type === 'resume_version'
-                                ? 'bg-indigo-50/60 border border-indigo-100'
-                                : msg.role === 'user'
-                                  ? 'bg-white border border-slate-200'
-                                  : 'bg-indigo-50 border border-indigo-100'
-                            }`}
-                          >
-                            <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
-                              <span>{msg.role === 'user' ? '你的指令' : msg.type === 'resume_version' ? '优化结果' : '系统回复'}</span>
-                              <span>{msg.time}</span>
-                            </div>
-                            {msg.type === 'resume_version' ? (
-                              <ResumeVersionMessageCard message={msg} onOpen={openResumeVersion} />
-                            ) : (
-                              <div className="whitespace-pre-wrap text-sm text-slate-700">{msg.content}</div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
+                    )}
+                    {hasResumePreview && resumeVersionCount === 0 && (
+                      <ResumeThumbnail result={result} docName={currentDocName} onOpen={() => setDrawerOpen(true)} />
                     )}
                   </div>
+                  {messages.length > 0 && (
+                    <div className="mt-5 flex items-center justify-between text-xs text-slate-400">
+                      <span>{resumeVersionCount > 0 ? `${resumeVersionCount} 个优化版本 · 点击结果查看预览与对比` : '继续输入指令，调整简历内容'} </span>
+                      <button type="button" onClick={clearCurrentMessages} className="shrink-0 hover:text-slate-700">清空对话</button>
+                    </div>
+                  )}
 
                   {(resumeContent.trim() || hasResumePreview) && (
                   <div className="mt-4 flex flex-wrap gap-2">
@@ -2773,19 +2413,6 @@ ${trimmedInstruction}`,
                 style={inputBarStyle}
               >
                 <div className="mx-auto w-full max-w-3xl rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_14px_36px_rgba(31,41,55,.10)]">
-                  {loading && (
-                    <OptimizationThinking
-                      flow={optimizationFlow}
-                      activeIndex={optimizationStageIndex}
-                      statusText={statusText}
-                    />
-                  )}
-                  {statusText && !loading && (
-                    <div className="mb-2 flex items-center gap-2 rounded-xl bg-indigo-50 px-3 py-2 text-xs font-black text-indigo-700">
-                      <i className="ri-loader-4-line animate-spin text-base" />
-                      {statusText}
-                    </div>
-                  )}
                   <input
                     value={command}
                     onChange={(event) => setCommand(event.target.value)}
@@ -2802,7 +2429,7 @@ ${trimmedInstruction}`,
                       <button
                         type="button"
                         onClick={() => fileInputRef.current?.click()}
-                        disabled={uploadingResume}
+                        disabled={uploadingResume || loading}
                         className="grid h-9 w-9 place-items-center rounded-lg bg-slate-50 text-slate-500 hover:bg-indigo-50 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-60"
                         title="上传简历"
                       >
@@ -2876,7 +2503,7 @@ ${trimmedInstruction}`,
                     </div>
                     <button
                       type="button"
-                      disabled={loading || !command.trim()}
+                      disabled={loading || uploadingResume || !command.trim()}
                       onClick={submitCommand}
                       className="inline-flex h-10 shrink-0 items-center gap-2 rounded-xl bg-indigo-600 px-4 text-sm font-black text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
                     >

@@ -13,18 +13,19 @@ export const aiProvider = {
   imageGenerationsPath: process.env.AI_IMAGE_GENERATIONS_PATH || '/images/generations',
   apiKey: process.env.TOAPIS_API_KEY || process.env.CUSTOM_PROXY_KEY || '',
   timeoutMs: boundedTimeout(process.env.AI_TIMEOUT_MS, 150000, 240000),
+  resumeTimeoutMs: boundedTimeout(process.env.AI_RESUME_TIMEOUT_MS, 300000, 300000),
   imageTimeoutMs: boundedTimeout(process.env.AI_IMAGE_TIMEOUT_MS, 180000, 300000),
   defaultModel: process.env.AI_DEFAULT_MODEL || process.env.TOAPIS_DEFAULT_MODEL || 'gemini-3.6-flash',
-  ocrModel: process.env.AI_OCR_MODEL || process.env.TOAPIS_OCR_MODEL || 'gemini-3.6-flash',
+  ocrModel: process.env.AI_OCR_MODEL || process.env.TOAPIS_OCR_MODEL || 'gpt-6-astra',
+  ocrFallbackModels: (process.env.AI_OCR_FALLBACK_MODELS ?? 'gpt-4o')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean),
   imageModel: process.env.AI_IMAGE_MODEL || process.env.TOAPIS_IMAGE_MODEL || 'gpt-image-2',
-  fallbackModels: [
-    ...(process.env.AI_FALLBACK_MODELS || 'gemini-3.6-flash,gpt-5.6-sol')
-      .split(',')
-      .map((item) => item.trim())
-      .filter(Boolean),
-    'gemini-3.6-flash',
-    'gpt-5.6-sol',
-  ],
+  fallbackModels: (process.env.AI_FALLBACK_MODELS ?? 'gemini-3.6-flash,gpt-5.6-sol')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean),
   responseFormat: { type: 'json_object' },
 };
 

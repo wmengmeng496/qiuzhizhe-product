@@ -20,6 +20,7 @@ create table if not exists users (
 alter table users add column if not exists phone text;
 alter table users add column if not exists password_hash text;
 alter table users add column if not exists updated_at timestamptz not null default now();
+alter table users add column if not exists auth_version integer not null default 0;
 create unique index if not exists users_phone_unique on users (phone) where phone is not null;
 
 create table if not exists user_consents (
@@ -93,6 +94,44 @@ create table if not exists user_social_accounts (
   unique (provider, provider_user_id)
 );
 create index if not exists user_social_accounts_user_id_idx on user_social_accounts (user_id);
+
+
+create table if not exists oauth_clients (
+  client_id text primary key,
+  client_secret_hash text not null,
+  client_name text not null,
+  redirect_uris text[] not null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists oauth_authorization_codes (
+  id bigserial primary key,
+  code_hash text unique not null,
+  client_id text not null references oauth_clients(client_id) on delete cascade,
+  user_id uuid not null references users(id) on delete cascade,
+  redirect_uri text not null,
+  scope text not null,
+  code_challenge text not null,
+  expires_at timestamptz not null,
+  consumed_at timestamptz,
+  created_at timestamptz not null default now()
+);
+create index if not exists oauth_authorization_codes_lookup_idx
+  on oauth_authorization_codes (client_id, code_hash);
+
+create table if not exists oauth_tokens (
+  id bigserial primary key,
+  client_id text not null references oauth_clients(client_id) on delete cascade,
+  user_id uuid not null references users(id) on delete cascade,
+  access_token_hash text unique not null,
+  refresh_token_hash text unique not null,
+  scope text not null,
+  access_expires_at timestamptz not null,
+  refresh_expires_at timestamptz not null,
+  revoked_at timestamptz,
+  created_at timestamptz not null default now()
+);
+create index if not exists oauth_tokens_user_client_idx on oauth_tokens (user_id, client_id);
 
 create table if not exists orders (
   id uuid primary key default gen_random_uuid(),

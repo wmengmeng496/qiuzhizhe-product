@@ -6,6 +6,7 @@ import { config } from './config.js';
 import { ApiError } from './errors.js';
 import { query, withTransaction } from './db.js';
 import { recordEvent } from './events.js';
+import { verifyCode } from './sms.js';
 
 const emailSchema = z.string().trim().toLowerCase().email();
 const phoneSchema = z.string().trim().regex(/^1[3-9]\d{9}$/, '请输入有效的 11 位手机号');
@@ -22,8 +23,18 @@ const authSchema = z.object({
   agreementVersion: z.string().trim().max(20).optional(),
 });
 
+const smsAuthSchema = z.object({
+  phone: phoneSchema,
+  code: z.string().trim().regex(/^\d{6}$/, '请输入 6 位短信验证码'),
+});
+
+const resetPasswordSchema = smsAuthSchema.extend({
+  password: z.string().min(6, '密码至少 6 位').max(128),
+});
+
+
 function publicUser(row) {
-  return {
+  const user = {
     id: row.id,
     email: row.email?.endsWith('@phone.local') ? '' : row.email,
     phone: row.phone || '',
@@ -31,6 +42,8 @@ function publicUser(row) {
     plan: row.plan,
     createdAt: row.created_at,
   };
+  Object.defineProperty(user, 'authVersion', { value: row.auth_version || 0, enumerable: false });
+  return user;
 }
 
 function isDbUnavailable(error) {
@@ -56,6 +69,7 @@ async function createMemoryUser(input) {
     display_name: input.displayName || defaultDisplayName(input.account),
     plan: 'ultimate',
     created_at: now,
+    auth_version: 0,
   };
   memoryUsers.set(key, user);
   if (input.email) memoryUsers.set(input.email.toLowerCase(), user);
@@ -130,7 +144,7 @@ location.replace(data.redirect || '/');
 
 export function signToken(user) {
   return jwt.sign(
-    { sub: user.id, email: user.email, plan: user.plan },
+    { sub: user.id, email: user.email, plan: user.plan, av: user.authVersion || 0 },
     config.jwtSecret,
     { expiresIn: '30d' },
   );
@@ -153,15 +167,15 @@ export async function requireAuth(req, res, next) {
     const decoded = verifyToken(token);
     try {
       const result = await query(
-        'select id, email, phone, display_name, plan, created_at from users where id = $1',
+        'select id, email, phone, display_name, plan, created_at, auth_version from users where id = $1',
         [decoded.sub],
       );
-      if (result.rowCount === 0) throw new ApiError(401, '登录状态已失效');
+      if (result.rowCount === 0 || Number(decoded.av || 0) !== Number(result.rows[0].auth_version || 0)) throw new ApiError(401, '登录状态已失效');
       req.user = publicUser(result.rows[0]);
     } catch (error) {
       if (!isDbUnavailable(error) || process.env.NODE_ENV === 'production') throw error;
       const memoryUser = findMemoryUserById(decoded.sub);
-      if (!memoryUser) throw new ApiError(401, '登录状态已失效，请重新登录');
+      if (!memoryUser || Number(decoded.av || 0) !== Number(memoryUser.auth_version || 0)) throw new ApiError(401, '登录状态已失效，请重新登录');
       req.user = publicUser(memoryUser);
       req.devMemoryAuth = true;
     }
@@ -200,7 +214,7 @@ export async function register(req, res) {
       const result = await client.query(
         `insert into users (email, phone, password_hash, display_name)
          values ($1, $2, $3, $4)
-         returning id, email, phone, display_name, plan, created_at`,
+         returning id, email, phone, display_name, plan, created_at, auth_version`,
         [email, input.phone || null, passwordHash, displayName],
       );
       const createdUser = publicUser(result.rows[0]);
@@ -234,7 +248,7 @@ export async function login(req, res) {
   let result;
   try {
     result = await query(
-      `select id, email, phone, password_hash, display_name, plan, created_at
+      `select id, email, phone, password_hash, display_name, plan, created_at, auth_version
        from users
        where ($1::text is not null and lower(email) = $1)
           or ($2::text is not null and phone = $2)
@@ -262,6 +276,37 @@ export async function login(req, res) {
 
   const user = publicUser(row);
   await recordEvent(req, { userId: user.id, eventType: 'auth.login', entityType: 'user', entityId: user.id });
+  res.json({ success: true, user, token: signToken(user) });
+}
+
+export async function loginWithSms(req, res) {
+  const input = smsAuthSchema.parse(req.body);
+  const result = await query(
+    `select id, email, phone, display_name, plan, created_at, auth_version
+     from users where phone = $1 limit 1`,
+    [input.phone],
+  );
+  if (result.rowCount === 0) throw new ApiError(404, '该手机号尚未注册，请先注册账号');
+  if (!verifyCode(input.phone, input.code, 'login')) throw new ApiError(400, '验证码错误或已过期，请重新获取');
+  const user = publicUser(result.rows[0]);
+  await recordEvent(req, { userId: user.id, eventType: 'auth.sms.login', entityType: 'user', entityId: user.id });
+  res.json({ success: true, user, token: signToken(user) });
+}
+
+export async function resetPasswordWithSms(req, res) {
+  const input = resetPasswordSchema.parse(req.body);
+  const existing = await query('select id from users where phone = $1 limit 1', [input.phone]);
+  if (existing.rowCount === 0) throw new ApiError(404, '该手机号尚未注册');
+  if (!verifyCode(input.phone, input.code, 'reset')) throw new ApiError(400, '验证码错误或已过期，请重新获取');
+  const passwordHash = await bcrypt.hash(input.password, 10);
+  const result = await query(
+    `update users set password_hash = $2, auth_version = auth_version + 1, updated_at = now()
+     where phone = $1
+     returning id, email, phone, display_name, plan, created_at, auth_version`,
+    [input.phone, passwordHash],
+  );
+  const user = publicUser(result.rows[0]);
+  await recordEvent(req, { userId: user.id, eventType: 'auth.password.reset', entityType: 'user', entityId: user.id });
   res.json({ success: true, user, token: signToken(user) });
 }
 
@@ -331,7 +376,7 @@ export async function handleWechatCallback(req, res) {
   const avatar = profile.headimgurl || '';
 
   const existing = await query(
-    `select u.id, u.email, u.phone, u.display_name, u.plan, u.created_at
+    `select u.id, u.email, u.phone, u.display_name, u.plan, u.created_at, u.auth_version
      from user_social_accounts s
      join users u on u.id = s.user_id
      where s.provider = 'wechat' and s.provider_user_id = $1`,
@@ -352,7 +397,7 @@ export async function handleWechatCallback(req, res) {
     const inserted = await query(
       `insert into users (email, password_hash, display_name)
        values ($1, null, $2)
-       returning id, email, phone, display_name, plan, created_at`,
+       returning id, email, phone, display_name, plan, created_at, auth_version`,
       [email, nickname],
     );
     user = publicUser(inserted.rows[0]);

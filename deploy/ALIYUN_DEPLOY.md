@@ -14,11 +14,13 @@ cp server/.env.example server/.env
 ```dotenv
 APP_RELEASE=<git-commit>
 AI_DEFAULT_MODEL=gpt-5.6-sol
-AI_OCR_MODEL=gpt-5.6-sol
+AI_OCR_MODEL=gpt-6-astra
+AI_OCR_FALLBACK_MODELS=gpt-4o
 AI_FALLBACK_MODELS=gpt-5.5,gpt-4o
+AI_RESUME_TIMEOUT_MS=300000
 ```
 
-不要提交 `server/.env`。
+不要提交 `server/.env`。`AI_OCR_MODEL` 和 `AI_OCR_FALLBACK_MODELS` 必须只配置确认支持图片输入的视觉模型；普通文本模型不要放入 OCR 回退列表。
 
 本地开发可使用仓库根目录的 `docker-compose.yml` 启动自带 PostgreSQL。生产部署不自动创建数据库，必须通过 `DATABASE_URL` 显式连接已备份、受监控的生产 PostgreSQL。发布脚本使用 `/api/ready` 验证数据库连接和 AI 密钥配置，`/api/health` 仅表示 API 进程存活。实时网关连通性可在后端容器运行 `npm run doctor` 检查。
 
@@ -35,7 +37,7 @@ Web 镜像同时包含 Nginx 配置，并将 `/api/` 转发到后端容器。后
 
 生产 Compose 仅将 Web 容器发布到服务器本机的 `127.0.0.1:8080`，避免与宝塔 Nginx
 占用的 80/443 端口冲突。在宝塔站点中将域名反向代理到 `http://127.0.0.1:8080`，
-公网流量和 HTTPS 证书继续由宝塔 Nginx 处理。
+公网流量和 HTTPS 证书继续由宝塔 Nginx 处理。多页 PDF 的视觉识别可能持续数分钟，宝塔外层反向代理也必须将 `proxy_read_timeout` 和 `proxy_send_timeout` 设置为至少 `330s`，并将请求体上限设置为至少 `8m`。
 
 ## 发布验收
 

@@ -5,6 +5,8 @@ import {
   getWechatConfig,
   handleWechatCallback,
   login,
+  loginWithSms,
+  resetPasswordWithSms,
   register,
   requireAdmin,
   requireAuth,
@@ -19,6 +21,7 @@ import { recordEvent } from './events.js';
 import { sendCode } from './sms.js';
 import { aiProvider } from '../config/ai.config.js';
 import { rateLimit } from './rate-limit.js';
+import { confirmOAuthAuthorization, exchangeOAuthToken, handleMcp, listOAuthConnections, registerOAuthClient, revokeOAuthConnection, startOAuthAuthorization } from './workbuddy.js';
 import { assertPublicAllowedUrl, fetchWithTimeout, readResponseText } from './url-safety.js';
 import {
   consumeDevCareerPhotoUsage,
@@ -46,6 +49,9 @@ export const optimizeSchema = z.object({
   resumePageImages: z.array(z.string().regex(/^data:image\/(?:jpeg|jpg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/, '简历图片必须是有效的图片数据').max(3_000_000)).max(5).optional().default([]),
   aiConsent: z.literal(true),
 }).superRefine((input, context) => {
+  if (input.resumePageImages.reduce((total, image) => total + image.length, 0) > 6_000_000) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['resumePageImages'], message: '简历图片总大小过大，请压缩 PDF 或减少页数后重试' });
+  }
   if (input.resumeContent.trim().length < 20 && input.resumePageImages.length === 0) {
     context.addIssue({ code: z.ZodIssueCode.too_small, minimum: 20, inclusive: true, type: 'string', path: ['resumeContent'], message: '简历文本至少需要 20 个字符，或提供 1-5 张简历图片用于 OCR' });
   }
@@ -138,6 +144,8 @@ router.get('/ready', asyncHandler(async (req, res) => {
 }));
 
 router.post('/auth/sms/send', rateLimit({ windowMs: 60_000, max: 5, message: '短信请求过于频繁，请稍后再试' }), asyncHandler(sendCode));
+router.post('/auth/login/sms', rateLimit({ windowMs: 60_000, max: 10, message: '登录尝试过于频繁，请稍后再试' }), asyncHandler(loginWithSms));
+router.post('/auth/password/reset/sms', rateLimit({ windowMs: 60_000, max: 5, message: '密码重置请求过于频繁，请稍后再试' }), asyncHandler(resetPasswordWithSms));
 
 function decodeHtmlEntities(value = '') {
   return value
@@ -335,6 +343,13 @@ router.post('/auth/login', rateLimit({ windowMs: 60_000, max: 20 }), asyncHandle
 router.get('/auth/wechat/config', asyncHandler(getWechatConfig));
 router.get('/auth/wechat/start', asyncHandler(startWechatLogin));
 router.get('/auth/wechat/callback', asyncHandler(handleWechatCallback));
+router.post('/oauth/register', rateLimit({ windowMs: 60_000, max: 20 }), asyncHandler(registerOAuthClient));
+router.get('/oauth/authorize', asyncHandler(startOAuthAuthorization));
+router.post('/oauth/authorize/confirm', requireAuth, asyncHandler(confirmOAuthAuthorization));
+router.post('/oauth/token', rateLimit({ windowMs: 60_000, max: 30 }), asyncHandler(exchangeOAuthToken));
+router.get('/me/oauth-connections', requireAuth, asyncHandler(listOAuthConnections));
+router.delete('/me/oauth-connections/:clientId', requireAuth, asyncHandler(revokeOAuthConnection));
+router.post('/mcp', asyncHandler(handleMcp));
 
 router.post('/job-description/fetch', rateLimit({ windowMs: 60_000, max: 20 }), asyncHandler(async (req, res) => {
   const input = jobDescriptionSchema.parse(req.body);
@@ -468,7 +483,7 @@ router.post('/resume-optimizations', rateLimit({ windowMs: 60_000, max: 10, mess
     highlightedContent: result.highlightedContent ? String(result.highlightedContent) : null,
     keywords: Array.isArray(result.keywords) ? result.keywords.map(String) : [],
     improvements: Array.isArray(result.improvements) ? result.improvements.map(String) : [],
-    matchScore: Number.isFinite(Number(result.matchScore)) ? Math.max(0, Math.min(100, Number(result.matchScore))) : 75,
+    matchScore: result.matchScore != null && result.matchScore !== '' && Number.isFinite(Number(result.matchScore)) ? Math.max(0, Math.min(100, Number(result.matchScore))) : 0,
     mode: input.optimizeMode,
     model: String(result.model || input.model),
   };
@@ -484,7 +499,7 @@ router.post('/resume-optimizations', rateLimit({ windowMs: 60_000, max: 10, mess
         job_title: input.jobTitle || null,
         company: input.company || null,
         job_requirements: input.jobRequirements,
-        resume_content: input.resumeContent,
+        resume_content: normalized.originalContent,
         optimize_mode: input.optimizeMode,
         model: normalized.model,
         optimized_content: normalized.optimizedContent,

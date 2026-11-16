@@ -12,6 +12,7 @@ import Auth from "../pages/auth/page";
 import CareerAssets from "../pages/career-assets/page";
 import Account from "../pages/account/page";
 import LegalPage from "../pages/legal/page";
+import OAuthAuthorizePage from "../pages/oauth-authorize/page";
 import { getStoredUser } from "../lib/api";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -63,6 +64,10 @@ const routes: RouteObject[] = [
   {
     path: "/auth",
     element: <Auth />,
+  },
+  {
+    path: "/oauth/authorize",
+    element: <OAuthAuthorizePage />,
   },
   {
     path: "/terms",

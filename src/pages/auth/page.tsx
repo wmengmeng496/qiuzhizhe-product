@@ -1,13 +1,17 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
-import { getStoredUser, login, register } from '@/lib/api';
+import { getStoredUser, login, loginWithSms, register, resetPasswordWithSms, sendSmsCode } from '@/lib/api';
 
 export default function AuthPage() {
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [channel, setChannel] = useState<'phone' | 'email'>('phone');
   const [account, setAccount] = useState('');
   const [password, setPassword] = useState('');
+  const [smsCode, setSmsCode] = useState('');
+  const [loginMethod, setLoginMethod] = useState<'password' | 'sms'>('password');
+  const [resetMode, setResetMode] = useState(false);
+  const [countdown, setCountdown] = useState(0);
   const [confirmPassword, setConfirmPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [termsAccepted, setTermsAccepted] = useState(false);
@@ -16,6 +20,12 @@ export default function AuthPage() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const redirect = params.get('redirect') || '/workspace';
+
+  useEffect(() => {
+    if (countdown <= 0) return undefined;
+    const timer = window.setTimeout(() => setCountdown((value) => value - 1), 1000);
+    return () => window.clearTimeout(timer);
+  }, [countdown]);
 
   useEffect(() => {
     if (getStoredUser()) {
@@ -44,11 +54,15 @@ export default function AuthPage() {
       setError('请输入有效的邮箱地址');
       return;
     }
-    if (password.length < 6) {
+    if (resetMode || (mode === 'login' && loginMethod === 'sms')) {
+      if (channel !== 'phone') { setError('短信验证码仅支持手机号'); return; }
+      if (!/^\d{6}$/.test(smsCode.trim())) { setError('请输入 6 位短信验证码'); return; }
+    }
+    if (!(mode === 'login' && loginMethod === 'sms') && password.length < 6) {
       setError('密码至少 6 位');
       return;
     }
-    if (mode === 'register' && password !== confirmPassword) {
+    if ((mode === 'register' || resetMode) && password !== confirmPassword) {
       setError('两次输入的密码不一致');
       return;
     }
@@ -58,7 +72,11 @@ export default function AuthPage() {
     }
     setLoading(true);
     try {
-      if (mode === 'login') {
+      if (resetMode) {
+        await resetPasswordWithSms(normalizedAccount, smsCode.trim(), password);
+      } else if (mode === 'login' && loginMethod === 'sms') {
+        await loginWithSms(normalizedAccount, smsCode.trim());
+      } else if (mode === 'login') {
         await login(channel === 'email' ? normalizedAccount.toLowerCase() : normalizedAccount, password);
       } else {
         await register(
@@ -71,6 +89,21 @@ export default function AuthPage() {
       navigate(redirect);
     } catch (err) {
       setError(err instanceof Error ? err.message : '操作失败，请稍后重试');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const requestSmsCode = async () => {
+    const phone = account.trim();
+    if (!/^1[3-9]\d{9}$/.test(phone)) { setError('请输入有效的 11 位手机号'); return; }
+    setLoading(true);
+    setError('');
+    try {
+      await sendSmsCode(phone, resetMode ? 'reset' : 'login');
+      setCountdown(60);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '验证码发送失败，请稍后重试');
     } finally {
       setLoading(false);
     }
@@ -115,13 +148,13 @@ export default function AuthPage() {
             返回首页
           </Link>
           <div>
-            <h2 className="text-2xl font-black text-slate-950">{mode === 'login' ? '登录账号' : '创建账号'}</h2>
+            <h2 className="text-2xl font-black text-slate-950">{resetMode ? '重置密码' : mode === 'login' ? '登录账号' : '创建账号'}</h2>
             <p className="mt-2 text-sm font-medium text-slate-500">
-              {mode === 'login' ? '使用手机号或邮箱进入你的工作台。' : '注册后可保存历史记录和会员额度。'}
+              {resetMode ? '通过注册手机号验证后设置新密码。' : mode === 'login' ? '使用手机号或邮箱进入你的工作台。' : '注册后可保存历史记录和会员额度。'}
             </p>
           </div>
 
-          <div className="mt-6 grid grid-cols-2 rounded-lg bg-slate-100 p-1">
+          {!resetMode && <div className="mt-6 grid grid-cols-2 rounded-lg bg-slate-100 p-1">
             {[
               ['login', '登录'],
               ['register', '注册'],
@@ -131,6 +164,8 @@ export default function AuthPage() {
                 type="button"
                 onClick={() => {
                   setMode(value as 'login' | 'register');
+                  setLoginMethod('password');
+                  setSmsCode('');
                   setConfirmPassword('');
                   setTermsAccepted(false);
                   setError('');
@@ -142,9 +177,9 @@ export default function AuthPage() {
                 {label}
               </button>
             ))}
-          </div>
+          </div>}
 
-          <div className="mt-4 grid grid-cols-2 gap-2">
+          {!resetMode && <div className="mt-4 grid grid-cols-2 gap-2">
             {[
               ['phone', '手机号', 'ri-smartphone-line'],
               ['email', '邮箱', 'ri-mail-line'],
@@ -154,6 +189,8 @@ export default function AuthPage() {
                 type="button"
                 onClick={() => {
                   setChannel(value as 'phone' | 'email');
+                  setLoginMethod('password');
+                  setSmsCode('');
                   setAccount('');
                   setError('');
                 }}
@@ -167,9 +204,9 @@ export default function AuthPage() {
                 {label}
               </button>
             ))}
-          </div>
+          </div>}
 
-        <form onSubmit={submit} className="mt-6 space-y-4">
+        {!resetMode && <form onSubmit={submit} className="mt-6 space-y-4">
           {mode === 'register' && (
             <div>
               <label className="mb-1.5 block text-xs font-black text-slate-500">昵称</label>
@@ -194,7 +231,7 @@ export default function AuthPage() {
               placeholder={channel === 'phone' ? '请输入 11 位手机号' : 'you@example.com'}
             />
           </div>
-          <div>
+          {(mode !== 'login' || loginMethod === 'password') && <div>
             <label className="mb-1.5 block text-xs font-black text-slate-500">密码</label>
             <input
               type="password"
@@ -206,8 +243,17 @@ export default function AuthPage() {
               className="w-full rounded-lg border border-slate-200 px-4 py-3 text-sm font-medium outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50"
               placeholder="至少 6 位"
             />
-          </div>
-          {mode === 'register' && (
+          </div>}
+          {(mode === 'login' && (loginMethod === 'sms' || resetMode)) && (
+            <div>
+              <label className="mb-1.5 block text-xs font-black text-slate-500">短信验证码</label>
+              <div className="flex gap-2">
+                <input value={smsCode} onChange={(e) => setSmsCode(e.target.value)} inputMode="numeric" maxLength={6} autoComplete="one-time-code" className="min-w-0 flex-1 rounded-lg border border-slate-200 px-4 py-3 text-sm font-medium outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50" placeholder="6 位验证码" />
+                <button type="button" disabled={loading || countdown > 0} onClick={requestSmsCode} className="shrink-0 rounded-lg border border-slate-200 px-3 text-xs font-bold text-indigo-600 disabled:text-slate-400">{countdown > 0 ? `${countdown}s 后重发` : '获取验证码'}</button>
+              </div>
+            </div>
+          )}
+          {(mode === 'register' || resetMode) && (
             <div>
               <label className="mb-1.5 block text-xs font-black text-slate-500">确认密码</label>
               <input
@@ -223,7 +269,7 @@ export default function AuthPage() {
             </div>
           )}
 
-          {mode === 'register' ? (
+          {mode === 'register' && !resetMode ? (
             <label className="flex cursor-pointer items-start gap-3 text-xs font-medium leading-5 text-slate-500">
               <input
                 type="checkbox"
@@ -256,18 +302,34 @@ export default function AuthPage() {
             </div>
           )}
 
+          {mode === 'login' && channel === 'phone' && !resetMode && <div className="flex items-center justify-between text-xs font-bold">
+            <button type="button" onClick={() => { setLoginMethod(loginMethod === 'password' ? 'sms' : 'password'); setError(''); }} className="text-indigo-600">{loginMethod === 'password' ? '短信验证码登录' : '密码登录'}</button>
+            <button type="button" onClick={() => { setResetMode(true); setLoginMethod('sms'); setSmsCode(''); setConfirmPassword(''); setError(''); }} className="text-slate-500 hover:text-indigo-600">忘记密码？</button>
+          </div>}
           <button
             disabled={loading}
             className="flex w-full items-center justify-center gap-2 rounded-lg bg-slate-950 py-3.5 text-sm font-black text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <i className={loading ? 'ri-loader-4-line animate-spin' : 'ri-login-circle-line'} />
-            {loading ? '处理中...' : mode === 'login' ? '登录' : '注册并登录'}
+            {loading ? '处理中...' : resetMode ? '验证并重置密码' : mode === 'login' ? '登录' : '注册并登录'}
           </button>
-        </form>
+        </form>}
 
-        <button
+        {resetMode && <form onSubmit={submit} className="mt-6 space-y-4">
+          <div><label className="mb-1.5 block text-xs font-black text-slate-500">手机号</label><input type="tel" required value={account} onChange={(e) => setAccount(e.target.value)} autoComplete="tel" className="w-full rounded-lg border border-slate-200 px-4 py-3 text-sm font-medium outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50" placeholder="请输入注册手机号" /></div>
+          <div><label className="mb-1.5 block text-xs font-black text-slate-500">短信验证码</label><div className="flex gap-2"><input value={smsCode} onChange={(e) => setSmsCode(e.target.value)} inputMode="numeric" maxLength={6} autoComplete="one-time-code" className="min-w-0 flex-1 rounded-lg border border-slate-200 px-4 py-3 text-sm font-medium outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50" placeholder="6 位验证码" /><button type="button" disabled={loading || countdown > 0} onClick={requestSmsCode} className="shrink-0 rounded-lg border border-slate-200 px-3 text-xs font-bold text-indigo-600 disabled:text-slate-400">{countdown > 0 ? `${countdown}s 后重发` : '获取验证码'}</button></div></div>
+          <div><label className="mb-1.5 block text-xs font-black text-slate-500">新密码</label><input type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" className="w-full rounded-lg border border-slate-200 px-4 py-3 text-sm font-medium outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50" placeholder="至少 6 位" /></div>
+          <div><label className="mb-1.5 block text-xs font-black text-slate-500">确认新密码</label><input type="password" required minLength={6} value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} autoComplete="new-password" className="w-full rounded-lg border border-slate-200 px-4 py-3 text-sm font-medium outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50" placeholder="再输入一次新密码" /></div>
+          {error && <div className="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-sm font-bold text-red-600">{error}</div>}
+          <button disabled={loading} className="flex w-full items-center justify-center gap-2 rounded-lg bg-slate-950 py-3.5 text-sm font-black text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50">{loading ? '处理中...' : '验证并重置密码'}</button>
+          <button type="button" onClick={() => { setResetMode(false); setError(''); }} className="w-full text-sm font-bold text-slate-500">返回登录</button>
+        </form>}
+
+        {!resetMode && <button
           onClick={() => {
             setMode(mode === 'login' ? 'register' : 'login');
+            setLoginMethod('password');
+            setSmsCode('');
             setConfirmPassword('');
             setTermsAccepted(false);
             setError('');
@@ -275,7 +337,7 @@ export default function AuthPage() {
           className="mt-5 w-full text-sm font-bold text-slate-500 hover:text-indigo-600"
         >
           {mode === 'login' ? '还没有账号？立即注册' : '已有账号？返回登录'}
-        </button>
+        </button>}
         </section>
       </div>
     </div>

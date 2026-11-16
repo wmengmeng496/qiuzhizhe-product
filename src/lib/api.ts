@@ -59,7 +59,9 @@ export function clearSession() {
         localStorage.removeItem(k);
       }
     }
-  } catch {}
+  } catch {
+    // Continue clearing the core session keys even if scoped cleanup fails.
+  }
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
   window.dispatchEvent(new Event('auth-change'));
@@ -123,6 +125,31 @@ export async function login(account: string, password: string): Promise<AuthResp
   return data;
 }
 
+export async function sendSmsCode(phone: string, purpose: 'login' | 'reset' = 'login') {
+  return apiRequest<{ success: true; message: string }>('/auth/sms/send', {
+    method: 'POST',
+    body: JSON.stringify({ phone, purpose }),
+  });
+}
+
+export async function loginWithSms(phone: string, code: string): Promise<AuthResponse> {
+  const data = await apiRequest<AuthResponse>('/auth/login/sms', {
+    method: 'POST',
+    body: JSON.stringify({ phone, code }),
+  });
+  setSession(data.token, data.user);
+  return data;
+}
+
+export async function resetPasswordWithSms(phone: string, code: string, password: string): Promise<AuthResponse> {
+  const data = await apiRequest<AuthResponse>('/auth/password/reset/sms', {
+    method: 'POST',
+    body: JSON.stringify({ phone, code, password }),
+  });
+  setSession(data.token, data.user);
+  return data;
+}
+
 export async function register(
   account: string,
   password: string,
@@ -141,6 +168,34 @@ export async function register(
   });
   setSession(data.token, data.user);
   return data;
+}
+
+export interface OAuthConnection {
+  client_id: string;
+  client_name: string;
+  connected_at: string;
+}
+
+export async function listOAuthConnections() {
+  return apiRequest<{ success: true; connections: OAuthConnection[] }>('/me/oauth-connections');
+}
+
+export async function revokeOAuthConnection(clientId: string) {
+  return apiRequest<{ success: true; revoked: number }>(`/me/oauth-connections/${encodeURIComponent(clientId)}`, { method: 'DELETE' });
+}
+
+export async function authorizeWorkBuddy(payload: {
+  clientId: string;
+  redirectUri: string;
+  scope: string;
+  state: string;
+  codeChallenge: string;
+  approved: boolean;
+}) {
+  return apiRequest<{ success: true; redirectUrl: string }>('/oauth/authorize/confirm', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function getWechatLoginConfig(redirect = '/') {

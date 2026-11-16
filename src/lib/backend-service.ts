@@ -30,7 +30,7 @@ export interface BackendOptimizationResult {
 
 export async function createResumeOptimization(payload: ResumeOptimizationPayload) {
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), 190000);
+  const timer = window.setTimeout(() => controller.abort(), 310000);
 
   try {
     const data = await apiRequest<{ success: true; result: BackendOptimizationResult }>('/resume-optimizations', {

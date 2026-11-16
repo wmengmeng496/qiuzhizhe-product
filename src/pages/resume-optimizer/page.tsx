@@ -3,9 +3,7 @@ import { Download, FileText, Loader2, Paperclip, Sparkles, Upload, Wand2 } from 
 import JSZip from 'jszip';
 import { createResumeOptimization, listResumeOptimizations } from '@/lib/backend-service';
 import { fetchJobDescription, getMe, getStoredUser, type CurrentUser } from '@/lib/api';
-import { extractDocxText } from '@/lib/docx-reader';
-import { extractPdfText } from '@/lib/pdf-reader';
-import { extractPdfPageImages } from '@/lib/pdf-image-reader';
+import { readResumeFile } from '@/lib/resume-file-reader';
 import { parseMarkedContent, stripMarkers } from '../home/components/ResumePreview';
 
 export type OptimizeMode = 'full' | 'intro' | 'skills' | 'experience' | 'project';
@@ -61,9 +59,6 @@ const MODEL_OPTIONS: Array<{ id: ModelId; name: string; desc: string; locked?: b
 ];
 
 const RESUME_DRAFT_KEY = 'resume_optimizer_draft_v2';
-const MAX_FILE_SIZE = 20 * 1024 * 1024;
-const MAX_PDF_PAGES = 10;
-const MAX_SCANNED_PDF_PAGES = 3;
 
 interface ResumeDraft {
   model: ModelId;
@@ -78,14 +73,6 @@ interface ResumeDraft {
   previewTab: 'optimized' | 'original' | 'diff';
   resultContent: string;
   result: OptimizeResult | null;
-}
-
-function getFileExtension(name: string) {
-  return name.slice(name.lastIndexOf('.')).toLowerCase();
-}
-
-function cleanText(value: string) {
-  return value.split('\u0000').join('').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function escapeXml(value: string) {
@@ -305,26 +292,6 @@ function openPrintablePdf(content: string, title = '优化简历') {
   win.document.close();
 }
 
-async function readTextFile(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(new Error('文件读取失败，请重试'));
-    reader.readAsText(file, 'utf-8');
-  });
-}
-
-async function extractResumeText(file: File) {
-  const ext = getFileExtension(file.name);
-  if (['.txt', '.md', '.markdown', '.csv', '.json'].includes(ext)) {
-    return cleanText(await readTextFile(file));
-  }
-  if (ext === '.pdf' || file.type.includes('pdf')) return cleanText(await extractPdfText(file));
-  if (ext === '.docx' || file.type.includes('wordprocessingml')) return cleanText(await extractDocxText(file));
-  if (ext === '.doc') throw new Error('暂不支持旧版 .doc，请另存为 .docx 后上传');
-  throw new Error('不支持该文件格式，请上传 PDF、DOCX、TXT、MD、CSV 或 JSON');
-}
-
 function canUseModel(user: CurrentUser | null, model: ModelId) {
   if (model === 'server-default') return true;
   if (!user) return model === 'gpt-5.6-sol' || model === 'gpt-4o' || model === 'gpt-3.5';
@@ -484,27 +451,17 @@ export default function ResumeOptimizerPage() {
     setStatus('正在读取简历文件');
     setResumePageImages([]);
     try {
-      if (file.size > MAX_FILE_SIZE) throw new Error('文件不能超过 20 MB，请压缩后重试');
-      const isPdf = getFileExtension(file.name) === '.pdf' || file.type.includes('pdf');
-      let pageImages: string[] = [];
-      if (isPdf) {
-        const pdfLib = await import('pdfjs-dist');
-        const pdf = await pdfLib.getDocument({ data: await file.arrayBuffer() }).promise;
-        if (pdf.numPages > MAX_PDF_PAGES) throw new Error('PDF 不能超过 10 页，请上传精简版简历');
-        if (pdf.numPages && (await extractPdfText(file)).length < 120) {
-          if (pdf.numPages > MAX_SCANNED_PDF_PAGES) throw new Error('扫描版 PDF 最多支持 3 页，请上传精简版或可复制文本的 PDF');
-          pageImages = await extractPdfPageImages(file, MAX_SCANNED_PDF_PAGES);
-        }
-      }
-      const content = await extractResumeText(file);
-      if (content.length < 20 && pageImages.length === 0) {
-        throw new Error('简历文本太短，请检查文件是否可读');
-      }
+      const parsed = await readResumeFile(file, { onStatus: setStatus });
       setResumeFile(file);
-      setResumeContent(content);
-      setResumePageImages(pageImages);
-      setStatus(pageImages.length ? `已读取 ${file.name}，AI 将辅助识别图片文本` : `已读取 ${file.name}`);
+      setResumeContent(parsed.content);
+      setResumePageImages(parsed.pageImages);
+      setStatus(parsed.requiresOcr
+        ? `已加载 ${file.name} 的全部 ${parsed.pageCount} 页，优化时将先进行视觉识别`
+        : `已读取 ${file.name}`);
     } catch (err) {
+      setResumeFile(null);
+      setResumeContent('');
+      setResumePageImages([]);
       setStatus('读取简历失败');
       setError(err instanceof Error ? err.message : '文件读取失败，请重试');
     }
@@ -581,13 +538,17 @@ export default function ResumeOptimizerPage() {
       setResult(next);
       setResultContent(next.optimizedContent);
       setResultReviewed(false);
+      if (next.originalContent?.trim()) {
+        setResumeContent(next.originalContent);
+        setResumePageImages([]);
+      }
       setHistoryItems((current) => [
         {
           id: next.id,
           job_title: jobPosition || null,
           company: jobCompany || null,
           job_requirements: jd,
-          resume_content: resume,
+          resume_content: next.originalContent || resume,
           optimize_mode: mode,
           model: next.model || selectedModel,
           optimized_content: next.optimizedContent,
@@ -736,7 +697,7 @@ export default function ResumeOptimizerPage() {
               <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-500">{fileLabel}</div>
               {resumePageImages.length > 0 && (
                 <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
-                  检测到 PDF 文本层不够完整，将用 GPT 视觉识别页面内容
+                  检测到扫描件或复杂版式，将使用视觉模型完整识别全部页面
                 </div>
               )}
               <textarea
