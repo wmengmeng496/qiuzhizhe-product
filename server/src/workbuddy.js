@@ -12,6 +12,7 @@ const OAUTH_SCOPES = ['openid', 'profile', 'resume.read', 'resume.write'];
 const CODE_TTL_MS = 10 * 60 * 1000;
 const ACCESS_TOKEN_TTL_MS = 60 * 60 * 1000;
 const REFRESH_TOKEN_TTL_MS = 60 * 24 * 60 * 60 * 1000;
+const MCP_PROTOCOL_VERSION = '2025-03-26';
 
 function baseUrl(req) {
   return (config.publicUrl || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
@@ -208,24 +209,26 @@ const optimizeToolSchema = z.object({
   optimizeMode: z.enum(['full', 'project', 'intro', 'experience', 'skills']).optional().default('full'), model: z.string().optional().default('gpt-5.6-sol'),
 });
 
-function requireScope(user, scope) {
-  if (!String(user.scope || '').split(/\s+/).includes(scope)) throw new ApiError(403, 'insufficient_scope');
+function requireScope(req, res, user, scope) {
+  if (String(user.scope || '').split(/\s+/).includes(scope)) return;
+  res.set('WWW-Authenticate', `Bearer error="insufficient_scope", scope="${scope}", resource_metadata="${baseUrl(req)}/.well-known/oauth-protected-resource"`);
+  throw new ApiError(403, 'insufficient_scope');
 }
 
-async function callMcpTool(req, user, name, args) {
+async function callMcpTool(req, res, user, name, args) {
   if (name === 'get_account_summary') {
-    requireScope(user, 'profile');
+    requireScope(req, res, user, 'profile');
     const usage = await withTransaction((client) => getUsage(client, user.user_id));
     return textContent({ displayName: user.display_name, plan: user.plan, usage, limits: planLimits[user.plan] || planLimits.free, workspaceUrl: `${baseUrl(req)}/workspace` });
   }
   if (name === 'list_resume_optimizations') {
-    requireScope(user, 'resume.read');
+    requireScope(req, res, user, 'resume.read');
     const limit = Math.max(1, Math.min(20, Number(args?.limit || 10)));
     const found = await query('select id, job_title, company, optimize_mode, model, match_score, created_at from resume_optimizations where user_id = $1 order by created_at desc limit $2', [user.user_id, limit]);
     return textContent(found.rows);
   }
   if (name === 'optimize_resume') {
-    requireScope(user, 'resume.write');
+    requireScope(req, res, user, 'resume.write');
     const input = optimizeToolSchema.parse(args || {});
     const authUser = { id: user.user_id, plan: user.plan };
     assertModelAllowed(authUser, input.model);
@@ -253,25 +256,81 @@ async function callMcpTool(req, user, name, args) {
   throw new ApiError(404, `未知工具：${name}`);
 }
 
-export async function handleMcp(req, res) {
-  const user = await requireMcpAuth(req, res);
-  const { id = null, method, params = {} } = req.body || {};
-  if (method === 'initialize') {
-    res.json({ jsonrpc: '2.0', id, result: { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: '职引简历', version: '1.0.0' } } });
-    return;
+function jsonRpcError(id, code, message) {
+  return { jsonrpc: '2.0', id, error: { code, message } };
+}
+
+export async function dispatchMcpMessage(req, res, user, message) {
+  if (!message || Array.isArray(message) || message.jsonrpc !== '2.0' || typeof message.method !== 'string') {
+    return { status: 400, body: jsonRpcError(null, -32600, 'Invalid Request') };
   }
-  if (method === 'notifications/initialized') { res.status(202).end(); return; }
-  if (method === 'tools/list') {
-    res.json({ jsonrpc: '2.0', id, result: { tools: [
+
+  const hasId = Object.prototype.hasOwnProperty.call(message, 'id');
+  const id = hasId ? message.id : null;
+  const params = message.params || {};
+
+  if (message.method === 'initialize') {
+    if (!hasId) return { status: 400, body: jsonRpcError(null, -32600, 'Invalid Request') };
+    return {
+      status: 200,
+      body: {
+        jsonrpc: '2.0',
+        id,
+        result: {
+          protocolVersion: MCP_PROTOCOL_VERSION,
+          capabilities: { tools: {} },
+          serverInfo: { name: '职引简历', version: '1.0.2' },
+        },
+      },
+    };
+  }
+
+  if (!hasId) return { status: 202 };
+
+  if (message.method === 'tools/list') {
+    return { status: 200, body: { jsonrpc: '2.0', id, result: { tools: [
       { name: 'optimize_resume', description: '根据目标岗位 JD 优化并保存当前用户的中文简历。', inputSchema: { type: 'object', properties: { resumeContent: { type: 'string' }, jobRequirements: { type: 'string' }, jobTitle: { type: 'string' }, company: { type: 'string' }, optimizeMode: { type: 'string', enum: ['full', 'project', 'intro', 'experience', 'skills'] }, model: { type: 'string' } }, required: ['resumeContent', 'jobRequirements'] } },
       { name: 'list_resume_optimizations', description: '读取当前账号最近的简历优化记录摘要。', inputSchema: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 20 } } } },
       { name: 'get_account_summary', description: '查看已绑定职引简历账号的套餐、额度和工作台地址。', inputSchema: { type: 'object', properties: {} } },
-    ] } });
-    return;
+    ] } } };
   }
-  if (method === 'tools/call') {
-    res.json({ jsonrpc: '2.0', id, result: await callMcpTool(req, user, params.name, params.arguments) });
-    return;
+
+  if (message.method === 'tools/call') {
+    if (!params || typeof params.name !== 'string' || !params.name) {
+      return { status: 200, body: jsonRpcError(id, -32602, 'Invalid params') };
+    }
+    try {
+      const result = await callMcpTool(req, res, user, params.name, params.arguments);
+      return { status: 200, body: { jsonrpc: '2.0', id, result } };
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 403 && error.message === 'insufficient_scope') throw error;
+      const messageText = error instanceof ApiError || error instanceof z.ZodError ? error.message : '工具调用失败，请稍后重试';
+      return { status: 200, body: { jsonrpc: '2.0', id, result: { ...textContent(messageText), isError: true } } };
+    }
   }
-  res.status(404).json({ jsonrpc: '2.0', id, error: { code: -32601, message: 'Method not found' } });
+
+  return { status: 200, body: jsonRpcError(id, -32601, 'Method not found') };
 }
+
+export async function handleMcp(req, res) {
+  const user = await requireMcpAuth(req, res);
+  if (!req.is('application/json')) {
+    res.status(415).json(jsonRpcError(null, -32600, 'Content-Type must be application/json'));
+    return;
+  }
+  const result = await dispatchMcpMessage(req, res, user, req.body);
+  if (result.body === undefined) {
+    res.status(result.status).end();
+    return;
+  }
+  res.status(result.status).json(result.body);
+}
+
+async function rejectUnsupportedMcpMethod(req, res) {
+  await requireMcpAuth(req, res);
+  res.set('Allow', 'POST');
+  res.status(405).end();
+}
+
+export const handleMcpGet = rejectUnsupportedMcpMethod;
+export const handleMcpDelete = rejectUnsupportedMcpMethod;

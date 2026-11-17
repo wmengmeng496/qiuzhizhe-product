@@ -21,7 +21,7 @@ import { recordEvent } from './events.js';
 import { sendCode } from './sms.js';
 import { aiProvider } from '../config/ai.config.js';
 import { rateLimit } from './rate-limit.js';
-import { confirmOAuthAuthorization, exchangeOAuthToken, handleMcp, listOAuthConnections, registerOAuthClient, revokeOAuthConnection, startOAuthAuthorization } from './workbuddy.js';
+import { confirmOAuthAuthorization, exchangeOAuthToken, handleMcp, handleMcpDelete, handleMcpGet, listOAuthConnections, registerOAuthClient, revokeOAuthConnection, startOAuthAuthorization } from './workbuddy.js';
 import { assertPublicAllowedUrl, fetchWithTimeout, readResponseText } from './url-safety.js';
 import {
   consumeDevCareerPhotoUsage,
@@ -349,7 +349,9 @@ router.post('/oauth/authorize/confirm', requireAuth, asyncHandler(confirmOAuthAu
 router.post('/oauth/token', rateLimit({ windowMs: 60_000, max: 30 }), asyncHandler(exchangeOAuthToken));
 router.get('/me/oauth-connections', requireAuth, asyncHandler(listOAuthConnections));
 router.delete('/me/oauth-connections/:clientId', requireAuth, asyncHandler(revokeOAuthConnection));
+router.get('/mcp', asyncHandler(handleMcpGet));
 router.post('/mcp', asyncHandler(handleMcp));
+router.delete('/mcp', asyncHandler(handleMcpDelete));
 
 router.post('/job-description/fetch', rateLimit({ windowMs: 60_000, max: 20 }), asyncHandler(async (req, res) => {
   const input = jobDescriptionSchema.parse(req.body);
