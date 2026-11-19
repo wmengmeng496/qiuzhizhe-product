@@ -1,5 +1,5 @@
 import { Link, useNavigate } from 'react-router-dom';
-import { clearSession, deleteAccount, deleteAccountData, exportAccountData, getStoredUser, listOAuthConnections, revokeOAuthConnection } from '@/lib/api';
+import { clearSession, deleteAccount, deleteAccountData, exportAccountData, getStoredUser, listOAuthConnections, logout, revokeOAuthConnection } from '@/lib/api';
 import type { OAuthConnection } from '@/lib/api';
 import { useEffect, useState } from 'react';
 
@@ -39,8 +39,8 @@ export default function AccountPage() {
       .finally(() => setConnectionLoading(false));
   }, []);
 
-  const handleLogout = () => {
-    clearSession();
+  const handleLogout = async () => {
+    await logout().catch(() => {});
     window.location.href = '/auth?redirect=/workspace';
   };
 

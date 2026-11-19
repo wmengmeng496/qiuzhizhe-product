@@ -2,7 +2,7 @@ import dns from 'node:dns/promises';
 import net from 'node:net';
 import tls from 'node:tls';
 import { pool, checkDatabase } from './db.js';
-import { config } from './config.js';
+import { config, smsConfigStatus } from './config.js';
 
 function connect(host, port, secure, timeoutMs = 5000) {
   return new Promise((resolve) => {
@@ -34,6 +34,7 @@ try {
   ai = { configured: Boolean(config.ai.key), reachable: false, code: error.code || 'INVALID_AI_URL' };
 }
 
-console.log(JSON.stringify({ database, ai }, null, 2));
+const sms = smsConfigStatus();
+console.log(JSON.stringify({ database, ai, sms }, null, 2));
 await pool.end();
-if (!database.ready || !ai.configured || !ai.reachable) process.exitCode = 1;
+if (!database.ready || !ai.configured || !ai.reachable || (sms.required && !sms.configured)) process.exitCode = 1;

@@ -7,6 +7,7 @@ import { ApiError } from './errors.js';
 import { query, withTransaction } from './db.js';
 import { recordEvent } from './events.js';
 import { verifyCode } from './sms.js';
+import { cookieToken, resolveSession } from './sms-auth.js';
 
 const emailSchema = z.string().trim().toLowerCase().email();
 const phoneSchema = z.string().trim().regex(/^1[3-9]\d{9}$/, '请输入有效的 11 位手机号');
@@ -162,7 +163,13 @@ export async function requireAuth(req, res, next) {
   try {
     const header = req.headers.authorization || '';
     const token = header.startsWith('Bearer ') ? header.slice(7) : '';
-    if (!token) throw new ApiError(401, '请先登录');
+    if (!token) {
+      const session = await resolveSession({ query: (...args) => query(...args) }, cookieToken(req.headers.cookie || ''));
+      if (!session) throw new ApiError(401, '请先登录');
+      req.user = publicUser(session);
+      next();
+      return;
+    }
 
     const decoded = verifyToken(token);
     try {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { clearSession, getMe, getStoredUser, type CurrentUser } from '@/lib/api';
+import { getMe, getStoredUser, logout, type CurrentUser } from '@/lib/api';
 
 const MENU = [
   { label: '简历优化', icon: 'ri-file-list-3-line', path: '/resume-optimizer' },
@@ -30,7 +30,7 @@ function SideNav({
 }: {
   user: CurrentUser | null;
   onNavigate?: () => void;
-  onLogout: () => void;
+  onLogout: () => void | Promise<void>;
 }) {
   const location = useLocation();
   const accountLabel = user?.phone || user?.email || '已登录';
@@ -154,8 +154,8 @@ export default function ProductShell({ children }: { children: React.ReactNode }
     };
   }, []);
 
-  const handleLogout = () => {
-    clearSession();
+  const handleLogout = async () => {
+    await logout().catch(() => {});
     setUser(null);
     setMobileOpen(false);
     window.location.href = '/auth?redirect=/workspace';

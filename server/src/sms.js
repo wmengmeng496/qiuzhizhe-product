@@ -32,6 +32,28 @@ function client() {
   }));
 }
 
+export async function deliverSmsCode(phone, code) {
+  if (!/^1[3-9]\d{9}$/.test(String(phone || ''))) throw new ApiError(400, '请输入有效的 11 位手机号');
+  if (!/^\d{6}$/.test(String(code || ''))) throw new ApiError(500, '验证码生成失败');
+  const request = new $Dysmsapi20170525.SendSmsRequest({
+    phoneNumbers: phone,
+    signName: config.sms.signName,
+    templateCode: config.sms.templateCode,
+    templateParam: JSON.stringify({ code }),
+  });
+  try {
+    const result = await client().sendSms(request);
+    if (result.body?.code && result.body.code !== 'OK') {
+      console.error('[sms:provider]', { code: result.body.code, requestId: result.body.requestId });
+      throw new ApiError(502, '短信发送失败，请稍后再试');
+    }
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    console.error('[sms:provider]', { code: error?.code || error?.name || 'UNKNOWN' });
+    throw new ApiError(502, '短信发送失败，请稍后再试');
+  }
+}
+
 export async function sendCode(req, res) {
   const phone = String(req.body?.phone || '').trim();
   if (!/^1[3-9]\d{9}$/.test(phone)) throw new ApiError(400, '请输入有效的 11 位手机号');
@@ -40,14 +62,7 @@ export async function sendCode(req, res) {
   const now = Date.now();
   if (now - (lastSent.get(phone) || 0) < 60_000) throw new ApiError(429, '验证码发送过于频繁，请稍后再试');
   const code = String(randomInt(100000, 1000000));
-  const request = new $Dysmsapi20170525.SendSmsRequest({
-    phoneNumbers: phone,
-    signName: config.sms.signName,
-    templateCode: config.sms.templateCode,
-    templateParam: JSON.stringify({ code }),
-  });
-  const result = await client().sendSms(request);
-  if (result.body?.code && result.body.code !== 'OK') throw new ApiError(502, result.body.message || '短信发送失败');
+  await deliverSmsCode(phone, code);
   codes.set(key, { code, expiresAt: now + CODE_TTL_MS });
   failedAttempts.delete(key);
   lastSent.set(phone, now);

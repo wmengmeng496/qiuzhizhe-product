@@ -11,6 +11,7 @@ import { applySchema } from './schema.js';
 import { oauthAuthorizationServerMetadata, oauthProtectedResourceMetadata } from './workbuddy.js';
 
 const app = express();
+app.set('trust proxy', ['loopback', 'linklocal', 'uniquelocal']);
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const staticDir = path.resolve(dirname, '../../out');
 

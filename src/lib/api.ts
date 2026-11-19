@@ -16,7 +16,7 @@ export interface CurrentUser {
 export interface AuthResponse {
   success: true;
   user: CurrentUser;
-  token: string;
+  token?: string;
 }
 
 export function getToken(): string {
@@ -32,8 +32,9 @@ export function getStoredUser(): CurrentUser | null {
   }
 }
 
-export function setSession(token: string, user: CurrentUser) {
-  localStorage.setItem(TOKEN_KEY, token);
+export function setSession(token: string | undefined, user: CurrentUser) {
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
   localStorage.setItem(USER_KEY, JSON.stringify(user));
   window.dispatchEvent(new Event('auth-change'));
 }
@@ -65,6 +66,14 @@ export function clearSession() {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
   window.dispatchEvent(new Event('auth-change'));
+}
+
+export async function logout() {
+  try {
+    await fetch(`${API_BASE_URL}/auth/v2/logout`, { method: 'POST', credentials: 'include' });
+  } finally {
+    clearSession();
+  }
 }
 
 export function clearUserLocalData(userId: string) {
@@ -103,6 +112,7 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}): Pr
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
     headers,
+    credentials: 'include',
   });
 
   const data = await response.json().catch(() => null);
@@ -126,6 +136,12 @@ export async function login(account: string, password: string): Promise<AuthResp
 }
 
 export async function sendSmsCode(phone: string, purpose: 'login' | 'reset' = 'login') {
+  if (purpose === 'login') {
+    return apiRequest<{ success: true; message: string }>('/auth/v2/challenge', {
+      method: 'POST',
+      body: JSON.stringify({ phone, purpose }),
+    });
+  }
   return apiRequest<{ success: true; message: string }>('/auth/sms/send', {
     method: 'POST',
     body: JSON.stringify({ phone, purpose }),
@@ -133,7 +149,7 @@ export async function sendSmsCode(phone: string, purpose: 'login' | 'reset' = 'l
 }
 
 export async function loginWithSms(phone: string, code: string): Promise<AuthResponse> {
-  const data = await apiRequest<AuthResponse>('/auth/login/sms', {
+  const data = await apiRequest<AuthResponse>('/auth/v2/login/code', {
     method: 'POST',
     body: JSON.stringify({ phone, code }),
   });

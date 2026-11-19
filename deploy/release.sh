@@ -15,6 +15,22 @@ if [ ! -f server/.env ]; then
   exit 1
 fi
 
+required_sms_vars="SMS_REQUIRED ALIBABA_CLOUD_ACCESS_KEY_ID ALIBABA_CLOUD_ACCESS_KEY_SECRET ALIBABA_CLOUD_SMS_SIGN_NAME ALIBABA_CLOUD_SMS_TEMPLATE_CODE"
+for name in $required_sms_vars; do
+  value=$(grep -E "^${name}=" server/.env | tail -n 1 | cut -d= -f2- || true)
+  case "$value" in
+    ""|replace-*|your-*|changeme|example|test)
+      echo "错误：server/.env 中 ${name} 缺失或仍是占位符。" >&2
+      exit 1
+      ;;
+  esac
+done
+
+if ! grep -Eq '^SMS_REQUIRED=true$' server/.env; then
+  echo "错误：生产环境必须设置 SMS_REQUIRED=true。" >&2
+  exit 1
+fi
+
 APP_RELEASE=${APP_RELEASE:-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)}
 export APP_RELEASE
 

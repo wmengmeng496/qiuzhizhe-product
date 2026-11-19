@@ -5,7 +5,6 @@ import {
   getWechatConfig,
   handleWechatCallback,
   login,
-  loginWithSms,
   resetPasswordWithSms,
   register,
   requireAdmin,
@@ -16,7 +15,8 @@ import { checkDatabase, query, withTransaction } from './db.js';
 import { asyncHandler, ApiError } from './errors.js';
 import { analyzeInterviewQuestion, generateCareerPhotoWithAi, optimizeResumeWithAi, summarizeInterviewReview } from './ai.js';
 import { assertAndConsumeUsage, assertModelAllowed, getUsage, refundUsage } from './usage.js';
-import { config, planLimits } from './config.js';
+import { config, planLimits, smsConfigStatus } from './config.js';
+import secureSmsRouter from './secure-sms-routes.js';
 import { recordEvent } from './events.js';
 import { sendCode } from './sms.js';
 import { aiProvider } from '../config/ai.config.js';
@@ -37,6 +37,8 @@ import {
 } from './dev-store.js';
 
 const router = Router();
+
+router.use('/auth/v2', secureSmsRouter);
 
 export const optimizeSchema = z.object({
   resumeContent: z.string().max(80000),
@@ -129,22 +131,27 @@ router.get('/health', (req, res) => {
       defaultModel: aiProvider.defaultModel,
       ocrModel: aiProvider.ocrModel,
     },
+    sms: smsConfigStatus(),
   });
 });
 
 router.get('/ready', asyncHandler(async (req, res) => {
   const database = await checkDatabase();
-  const ready = database.ready && Boolean(config.ai.key);
+  const sms = smsConfigStatus();
+  const ready = database.ready && Boolean(config.ai.key) && (!sms.required || sms.configured);
   res.status(ready ? 200 : 503).json({
     success: ready,
     status: ready ? 'ready' : 'not_ready',
     database,
     ai: { configured: Boolean(config.ai.key) },
+    sms,
   });
 }));
 
-router.post('/auth/sms/send', rateLimit({ windowMs: 60_000, max: 5, message: '短信请求过于频繁，请稍后再试' }), asyncHandler(sendCode));
-router.post('/auth/login/sms', rateLimit({ windowMs: 60_000, max: 10, message: '登录尝试过于频繁，请稍后再试' }), asyncHandler(loginWithSms));
+router.post('/auth/sms/send', rateLimit({ windowMs: 60_000, max: 5, message: '短信请求过于频繁，请稍后再试' }), asyncHandler((req, res) => {
+  if ((req.body?.purpose || 'login') === 'login') throw new ApiError(410, '请使用新版短信登录接口');
+  return sendCode(req, res);
+}));
 router.post('/auth/password/reset/sms', rateLimit({ windowMs: 60_000, max: 5, message: '密码重置请求过于频繁，请稍后再试' }), asyncHandler(resetPasswordWithSms));
 
 function decodeHtmlEntities(value = '') {

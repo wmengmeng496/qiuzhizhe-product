@@ -6,6 +6,15 @@ function joinUrl(baseURL, path) {
   return `${baseURL.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
 }
 
+function readBoolean(value, fallback = false) {
+  if (value == null || value === '') return fallback;
+  return String(value).toLowerCase() === 'true';
+}
+
+function isPlaceholder(value) {
+  return !value || /^(replace-|your-|changeme|example|test)/i.test(String(value).trim());
+}
+
 export const config = {
   port: Number(process.env.PORT || 8080),
   release: process.env.APP_RELEASE || process.env.GIT_COMMIT || 'development',
@@ -25,13 +34,24 @@ export const config = {
     redirectUri: process.env.WECHAT_REDIRECT_URI || '',
   },
   sms: {
+    required: readBoolean(process.env.SMS_REQUIRED, process.env.NODE_ENV === 'production'),
     accessKeyId: process.env.ALIBABA_CLOUD_ACCESS_KEY_ID || '',
     accessKeySecret: process.env.ALIBABA_CLOUD_ACCESS_KEY_SECRET || '',
     signName: process.env.ALIBABA_CLOUD_SMS_SIGN_NAME || '',
-    templateCode: process.env.ALIBABA_CLOUD_SMS_TEMPLATE_CODE || 'SMS_337360301',
+    templateCode: process.env.ALIBABA_CLOUD_SMS_TEMPLATE_CODE || '',
     endpoint: process.env.ALIBABA_CLOUD_SMS_ENDPOINT || 'dysmsapi.aliyuncs.com',
   },
 };
+
+export function smsConfigStatus() {
+  const missing = [
+    ['ALIBABA_CLOUD_ACCESS_KEY_ID', config.sms.accessKeyId],
+    ['ALIBABA_CLOUD_ACCESS_KEY_SECRET', config.sms.accessKeySecret],
+    ['ALIBABA_CLOUD_SMS_SIGN_NAME', config.sms.signName],
+    ['ALIBABA_CLOUD_SMS_TEMPLATE_CODE', config.sms.templateCode],
+  ].filter(([, value]) => isPlaceholder(value)).map(([name]) => name);
+  return { required: config.sms.required, configured: missing.length === 0, missing };
+}
 
 export function validateProductionConfig() {
   if (process.env.NODE_ENV !== 'production') return;
@@ -49,6 +69,10 @@ export function validateProductionConfig() {
   }
   if (config.jwtSecret.length < 32) {
     throw new Error('生产环境 JWT_SECRET 至少需要 32 个字符');
+  }
+  const sms = smsConfigStatus();
+  if (sms.required && !sms.configured) {
+    throw new Error(`生产环境短信配置无效：${sms.missing.join(', ')}`);
   }
 }
 

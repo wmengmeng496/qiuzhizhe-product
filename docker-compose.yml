@@ -32,6 +32,7 @@ services:
     environment:
       APP_RELEASE: ${APP_RELEASE:-local}
       DATABASE_URL: postgres://job_assistant:job_assistant@postgres:5432/job_assistant
+      SMS_REQUIRED: "false"
     depends_on:
       postgres:
         condition: service_healthy
