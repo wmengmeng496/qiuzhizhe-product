@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { dispatchMcpMessage, handleMcpDelete, handleMcpGet, hashToken, normalizeRedirectUri, normalizeRedirectUris, normalizeScopes, redirectUriMatches } from '../src/workbuddy.js';
+import { dispatchMcpMessage, handleMcpDelete, handleMcpGet, hashToken, normalizeRedirectUri, normalizeRedirectUris, normalizeScopes, readOAuthClientCredentials, redirectUriMatches } from '../src/workbuddy.js';
 
 test('WorkBuddy OAuth accepts HTTPS and localhost redirect URIs only', () => {
   assert.deepEqual(normalizeRedirectUris(['https://workbuddy.cn/callback']), ['https://workbuddy.cn/callback']);
@@ -31,6 +31,18 @@ test('WorkBuddy stores only deterministic token hashes', () => {
 });
 
 
+test('WorkBuddy token endpoint accepts Basic and form client credentials', () => {
+  const basic = Buffer.from(`${encodeURIComponent('zyc_test')}:${encodeURIComponent('secret:value')}`).toString('base64');
+  assert.deepEqual(readOAuthClientCredentials({ headers: { authorization: `Basic ${basic}` }, body: {} }), {
+    clientId: 'zyc_test',
+    clientSecret: 'secret:value',
+  });
+  assert.deepEqual(readOAuthClientCredentials({ headers: {}, body: { client_id: 'zyc_post', client_secret: 'post_secret' } }), {
+    clientId: 'zyc_post',
+    clientSecret: 'post_secret',
+  });
+  assert.throws(() => readOAuthClientCredentials({ headers: { authorization: 'Basic invalid' }, body: {} }), (error) => error.status === 401 && error.message === 'invalid_client');
+});
 test('MCP initialize returns a supported Streamable HTTP protocol result', async () => {
   const result = await dispatchMcpMessage({}, {}, {}, {
     jsonrpc: '2.0',

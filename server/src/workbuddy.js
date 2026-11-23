@@ -39,6 +39,32 @@ export function redirectUriMatches(registeredRedirectUris, redirectUri) {
   return (registeredRedirectUris || []).some((registeredRedirectUri) => normalizeRedirectUri(registeredRedirectUri) === normalizedRedirectUri);
 }
 
+function decodeOAuthClientCredential(value) {
+  try {
+    return decodeURIComponent(String(value).replace(/\+/g, ' '));
+  } catch {
+    throw new ApiError(401, 'invalid_client');
+  }
+}
+
+export function readOAuthClientCredentials(req) {
+  const authorization = String(req.headers?.authorization || '');
+  if (/^Basic\s/i.test(authorization)) {
+    const encoded = authorization.replace(/^Basic\s+/i, '');
+    const decoded = Buffer.from(encoded, 'base64').toString('utf8');
+    const separator = decoded.indexOf(':');
+    if (!encoded || separator < 0) throw new ApiError(401, 'invalid_client');
+    return {
+      clientId: decodeOAuthClientCredential(decoded.slice(0, separator)),
+      clientSecret: decodeOAuthClientCredential(decoded.slice(separator + 1)),
+    };
+  }
+  return {
+    clientId: String(req.body?.client_id || ''),
+    clientSecret: String(req.body?.client_secret || ''),
+  };
+}
+
 export function normalizeRedirectUris(value) {
   if (!Array.isArray(value) || value.length === 0 || value.length > 10) throw new ApiError(400, 'redirect_uris 必须包含至少一个回调地址');
   return value.map((item) => {
@@ -100,7 +126,7 @@ export function oauthAuthorizationServerMetadata(req, res) {
     registration_endpoint: `${root}/api/oauth/register`,
     response_types_supported: ['code'],
     grant_types_supported: ['authorization_code', 'refresh_token'],
-    token_endpoint_auth_methods_supported: ['client_secret_post'],
+    token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
     code_challenge_methods_supported: ['S256'],
     scopes_supported: OAUTH_SCOPES,
   });
@@ -112,8 +138,9 @@ export async function registerOAuthClient(req, res) {
   const clientName = String(req.body?.client_name || 'WorkBuddy Connector').trim().slice(0, 120);
   const clientId = `zyc_${randomBytes(16).toString('hex')}`;
   const clientSecret = createOpaqueToken('zys');
+  const tokenEndpointAuthMethod = req.body?.token_endpoint_auth_method === 'client_secret_post' ? 'client_secret_post' : 'client_secret_basic';
   await query('insert into oauth_clients (client_id, client_secret_hash, client_name, redirect_uris) values ($1, $2, $3, $4)', [clientId, await bcrypt.hash(clientSecret, 10), clientName, redirectUris]);
-  res.status(201).json({ client_id: clientId, client_secret: clientSecret, client_name: clientName, redirect_uris: redirectUris, grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], token_endpoint_auth_method: 'client_secret_post' });
+  res.status(201).json({ client_id: clientId, client_secret: clientSecret, client_name: clientName, redirect_uris: redirectUris, grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], token_endpoint_auth_method: tokenEndpointAuthMethod });
 }
 
 export async function startOAuthAuthorization(req, res) {
@@ -150,10 +177,10 @@ export async function confirmOAuthAuthorization(req, res) {
 export async function exchangeOAuthToken(req, res) {
   res.set('Cache-Control', 'no-store');
   const grantType = String(req.body?.grant_type || '');
-  const clientId = String(req.body?.client_id || '');
-  if (!req.body?.client_secret) throw new ApiError(401, 'invalid_client');
+  const { clientId, clientSecret } = readOAuthClientCredentials(req);
+  if (!clientId || !clientSecret) throw new ApiError(401, 'invalid_client');
   const redirectUri = req.body?.redirect_uri ? normalizeRedirectUri(req.body.redirect_uri) : undefined;
-  await verifyClient(clientId, req.body.client_secret, redirectUri);
+  await verifyClient(clientId, clientSecret, redirectUri);
   if (grantType === 'authorization_code') {
     const challenge = createHash('sha256').update(String(req.body?.code_verifier || '')).digest('base64url');
     const found = await query(
