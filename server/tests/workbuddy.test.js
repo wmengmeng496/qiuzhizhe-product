@@ -1,12 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { dispatchMcpMessage, handleMcpDelete, handleMcpGet, hashToken, normalizeRedirectUris, normalizeScopes } from '../src/workbuddy.js';
+import { dispatchMcpMessage, handleMcpDelete, handleMcpGet, hashToken, normalizeRedirectUri, normalizeRedirectUris, normalizeScopes, redirectUriMatches } from '../src/workbuddy.js';
 
 test('WorkBuddy OAuth accepts HTTPS and localhost redirect URIs only', () => {
   assert.deepEqual(normalizeRedirectUris(['https://workbuddy.cn/callback']), ['https://workbuddy.cn/callback']);
+  assert.deepEqual(normalizeRedirectUris(['https://oauth-callback.workbuddy.cn']), ['https://oauth-callback.workbuddy.cn/']);
   assert.deepEqual(normalizeRedirectUris(['http://127.0.0.1:3000/callback']), ['http://127.0.0.1:3000/callback']);
   assert.throws(() => normalizeRedirectUris(['http://example.com/callback']));
+  assert.throws(() => normalizeRedirectUris(['not a URL']), (error) => error.status === 400);
+});
+
+test('WorkBuddy OAuth normalizes only equivalent redirect URIs', () => {
+  assert.equal(normalizeRedirectUri('https://oauth-callback.workbuddy.cn'), normalizeRedirectUri('https://oauth-callback.workbuddy.cn/'));
+  assert.equal(redirectUriMatches(['https://oauth-callback.workbuddy.cn/'], 'https://oauth-callback.workbuddy.cn'), true);
+  assert.equal(redirectUriMatches(['https://oauth-callback.workbuddy.cn'], 'https://oauth-callback.workbuddy.cn/'), true);
+  assert.equal(redirectUriMatches(['https://oauth-callback.workbuddy.cn/callback'], 'https://oauth-callback.workbuddy.cn/'), false);
+  assert.equal(redirectUriMatches(['https://oauth-callback.workbuddy.cn/?state=1'], 'https://oauth-callback.workbuddy.cn/?state=2'), false);
 });
 
 test('WorkBuddy OAuth rejects unknown scopes and removes duplicates', () => {

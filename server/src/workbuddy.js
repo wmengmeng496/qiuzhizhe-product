@@ -26,12 +26,26 @@ function createOpaqueToken(prefix) {
   return `${prefix}_${randomBytes(32).toString('base64url')}`;
 }
 
+export function normalizeRedirectUri(value) {
+  try {
+    return new URL(String(value)).toString();
+  } catch {
+    throw new ApiError(400, 'OAuth 回调地址格式无效');
+  }
+}
+
+export function redirectUriMatches(registeredRedirectUris, redirectUri) {
+  const normalizedRedirectUri = normalizeRedirectUri(redirectUri);
+  return (registeredRedirectUris || []).some((registeredRedirectUri) => normalizeRedirectUri(registeredRedirectUri) === normalizedRedirectUri);
+}
+
 export function normalizeRedirectUris(value) {
   if (!Array.isArray(value) || value.length === 0 || value.length > 10) throw new ApiError(400, 'redirect_uris 必须包含至少一个回调地址');
   return value.map((item) => {
-    const url = new URL(String(item));
+    const normalized = normalizeRedirectUri(item);
+    const url = new URL(normalized);
     if (url.protocol !== 'https:' && url.hostname !== '127.0.0.1' && url.hostname !== 'localhost') throw new ApiError(400, 'OAuth 回调地址必须使用 HTTPS');
-    return url.toString();
+    return normalized;
   });
 }
 
@@ -55,7 +69,7 @@ async function verifyClient(clientId, clientSecret, redirectUri) {
   if (!found.rowCount) throw new ApiError(401, 'invalid_client');
   const client = found.rows[0];
   if (clientSecret !== undefined && (!clientSecret || !(await bcrypt.compare(String(clientSecret), client.client_secret_hash)))) throw new ApiError(401, 'invalid_client');
-  if (redirectUri && !client.redirect_uris.includes(redirectUri)) throw new ApiError(400, 'invalid_grant');
+  if (redirectUri && !redirectUriMatches(client.redirect_uris, redirectUri)) throw new ApiError(400, 'invalid_grant');
   return client;
 }
 
@@ -107,28 +121,30 @@ export async function startOAuthAuthorization(req, res) {
     response_type: z.literal('code'), client_id: z.string().min(1), redirect_uri: z.string().url(), scope: z.string().optional(), state: z.string().max(2000).optional(),
     code_challenge: z.string().min(43).max(128), code_challenge_method: z.literal('S256'),
   }).parse(req.query);
-  const client = await verifyClient(input.client_id, undefined, input.redirect_uri);
-  const params = new URLSearchParams({ client_id: input.client_id, client_name: client.client_name, redirect_uri: input.redirect_uri, scope: normalizeScopes(input.scope).join(' '), code_challenge: input.code_challenge, code_challenge_method: input.code_challenge_method });
+  const redirectUri = normalizeRedirectUri(input.redirect_uri);
+  const client = await verifyClient(input.client_id, undefined, redirectUri);
+  const params = new URLSearchParams({ client_id: input.client_id, client_name: client.client_name, redirect_uri: redirectUri, scope: normalizeScopes(input.scope).join(' '), code_challenge: input.code_challenge, code_challenge_method: input.code_challenge_method });
   if (input.state) params.set('state', input.state);
   res.redirect(`/oauth/authorize?${params.toString()}`);
 }
 
 export async function confirmOAuthAuthorization(req, res) {
   const input = z.object({ clientId: z.string().min(1), redirectUri: z.string().url(), scope: z.string(), state: z.string().max(2000).optional().default(''), codeChallenge: z.string().min(43).max(128), approved: z.boolean() }).parse(req.body);
-  await verifyClient(input.clientId, undefined, input.redirectUri);
+  const redirectUri = normalizeRedirectUri(input.redirectUri);
+  await verifyClient(input.clientId, undefined, redirectUri);
   const scopes = normalizeScopes(input.scope);
   if (!input.approved) {
-    res.json({ success: true, redirectUrl: appendOAuthResult(input.redirectUri, { error: 'access_denied', state: input.state }) });
+    res.json({ success: true, redirectUrl: appendOAuthResult(redirectUri, { error: 'access_denied', state: input.state }) });
     return;
   }
   const code = createOpaqueToken('zyc');
   await query(
     `insert into oauth_authorization_codes (code_hash, client_id, user_id, redirect_uri, scope, code_challenge, expires_at)
      values ($1, $2, $3, $4, $5, $6, $7)`,
-    [hashToken(code), input.clientId, req.user.id, input.redirectUri, scopes.join(' '), input.codeChallenge, new Date(Date.now() + CODE_TTL_MS)],
+    [hashToken(code), input.clientId, req.user.id, redirectUri, scopes.join(' '), input.codeChallenge, new Date(Date.now() + CODE_TTL_MS)],
   );
   await recordEvent(req, { userId: req.user.id, eventType: 'auth.workbuddy.bind', entityType: 'oauth_client', entityId: input.clientId });
-  res.json({ success: true, redirectUrl: appendOAuthResult(input.redirectUri, { code, state: input.state }) });
+  res.json({ success: true, redirectUrl: appendOAuthResult(redirectUri, { code, state: input.state }) });
 }
 
 export async function exchangeOAuthToken(req, res) {
@@ -136,7 +152,8 @@ export async function exchangeOAuthToken(req, res) {
   const grantType = String(req.body?.grant_type || '');
   const clientId = String(req.body?.client_id || '');
   if (!req.body?.client_secret) throw new ApiError(401, 'invalid_client');
-  await verifyClient(clientId, req.body.client_secret, req.body?.redirect_uri);
+  const redirectUri = req.body?.redirect_uri ? normalizeRedirectUri(req.body.redirect_uri) : undefined;
+  await verifyClient(clientId, req.body.client_secret, redirectUri);
   if (grantType === 'authorization_code') {
     const challenge = createHash('sha256').update(String(req.body?.code_verifier || '')).digest('base64url');
     const found = await query(
@@ -144,7 +161,7 @@ export async function exchangeOAuthToken(req, res) {
        where code_hash = $1 and client_id = $2 and redirect_uri = $3 and code_challenge = $4
          and consumed_at is null and expires_at > now()
        returning user_id, scope`,
-      [hashToken(String(req.body?.code || '')), clientId, req.body?.redirect_uri, challenge],
+      [hashToken(String(req.body?.code || '')), clientId, redirectUri, challenge],
     );
     if (!found.rowCount) throw new ApiError(400, 'invalid_grant');
     res.json(await issueTokens(clientId, found.rows[0].user_id, found.rows[0].scope));
